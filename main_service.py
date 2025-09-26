@@ -28,7 +28,7 @@ from errors.server_errors import (
     ElementoServiceUnavailable,
 )
 
-root_path = ["platform", "software"]
+root_path = ["platforms", "software"]
 prefix = "service"
 methods = [
     "get_service",

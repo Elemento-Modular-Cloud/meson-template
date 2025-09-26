@@ -1,4 +1,4 @@
-from ..models.PlatformExampleModel import ExampleModel, ExampleCapabilities
+from models.PlatformExampleModel import ExampleModel, ExampleCapabilities
 
 # This file contains the functions that will be used to execute specific services on this specific provider.
 
