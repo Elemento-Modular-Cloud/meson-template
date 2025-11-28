@@ -27,6 +27,7 @@ from errors.server_errors import (
     ElementoInternalServerError,
     ElementoServiceUnavailable,
 )
+from commons.elemento_iam import ElementoIdentityAccessManagement
 
 root_path = ["platforms", "software"]
 prefix = "service"
@@ -55,11 +56,13 @@ except Exception as error:
     exit(1)
 
 app = FastAPI(docs_url=None)
+elemento_iam = ElementoIdentityAccessManagement()
 
 # This is an example implementation for the routing of services supported on this specific provider.
 
 
 @app.get("/")
+@elemento_iam.validate_request
 async def health():
     PlainTextResponse(
         status_code=200,
@@ -68,6 +71,7 @@ async def health():
 
 
 @app.get("/api/v1.0/health")
+@elemento_iam.validate_request
 def health():
     return JSONResponse(
         status_code=200,
@@ -76,6 +80,7 @@ def health():
 
 
 @app.get("/api/v1.0/{service}/running")
+@elemento_iam.validate_request
 async def service_description(request: Request, service: str):
     try:
         client_uuid = request.headers.get("client_uuid")
@@ -149,6 +154,7 @@ async def service_description(request: Request, service: str):
     
 
 @app.get("/api/v1.0/{service}/running/{service_uid}")
+@elemento_iam.validate_request
 async def service_description_by_id(request: Request, service: str, service_uid: str):
     try:
         client_uuid = request.headers.get("client_uuid")
@@ -231,6 +237,7 @@ async def service_description_by_id(request: Request, service: str, service_uid:
 
 
 @app.post("/api/v1.0/{service}/create")
+@elemento_iam.validate_request
 async def create_service(request: Request, service: str):
     try:
         service_to_create = await request.json()
@@ -347,6 +354,7 @@ async def create_service(request: Request, service: str):
 
 
 @app.delete("/api/v1.0/{service}/delete")
+@elemento_iam.validate_request
 async def delete_service(request: Request, service: str):
     try:
         service_to_delete = await request.json()

@@ -50,11 +50,14 @@ from errors.client_errors import (
     BadRequestFieldError,
     ElementoTooEarly,
 )
+from commons.elemento_iam import ElementoIdentityAccessManagement
 
+elemento_iam = ElementoIdentityAccessManagement()
 app = FastAPI(docs_url=None)
 
 
 @app.get("/")
+@elemento_iam.validate_request
 def health():
     return PlainTextResponse(
         status_code=200,
@@ -63,6 +66,7 @@ def health():
 
 
 @app.get("/api/v1.0/health")
+@elemento_iam.validate_request
 def health():
     return JSONResponse(
         status_code=200,
@@ -71,6 +75,7 @@ def health():
 
 
 @app.get("/api/v1.0/status")
+@elemento_iam.validate_request
 def status(req: Request):
     try:
         content_type = req.headers.get("Content-Type")
@@ -106,6 +111,7 @@ def status(req: Request):
 
 
 @app.get("/api/v1.0/running/{vm_uuid}")
+@elemento_iam.validate_request
 async def server_description_by_id(req: Request, vm_uuid: str):
     try:
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
@@ -127,6 +133,7 @@ async def server_description_by_id(req: Request, vm_uuid: str):
 
 
 @app.get("/api/v1.0/running")
+@elemento_iam.validate_request
 async def servers_description(req: Request):
     try:
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
@@ -174,6 +181,7 @@ async def servers_description(req: Request):
 
 
 @app.post("/api/v1.0/register")
+@elemento_iam.validate_request
 async def server_creation(req: Request):
     try:
         servers_to_create = await req.json()
@@ -329,6 +337,7 @@ async def server_creation(req: Request):
 
 
 @app.get("/api/v1.0/canallocate")
+@elemento_iam.validate_request
 async def cancreate(req: Request):
     try:
         servers_to_create = await req.json()
@@ -487,6 +496,7 @@ async def cancreate(req: Request):
 
 
 @app.delete("/api/v1.0/unregister")
+@elemento_iam.validate_request
 async def server_destruction(req: Request):
     try:
         to_destroy = await req.json()
@@ -577,6 +587,7 @@ async def server_destruction(req: Request):
 
 
 @app.post("/api/v1.0/start")
+@elemento_iam.validate_request
 async def server_start(req: Request):
     try:
         to_start = await req.json()
@@ -620,6 +631,7 @@ async def server_start(req: Request):
 
 
 @app.post("/api/v1.0/stop")
+@elemento_iam.validate_request
 async def server_stop(req: Request):
     try:
         to_stop = await req.json()
@@ -663,6 +675,7 @@ async def server_stop(req: Request):
 
 
 @app.post("/api/v1.0/restart")
+@elemento_iam.validate_request
 async def server_restart(req: Request):
     try:
         to_start = await req.json()
@@ -706,10 +719,9 @@ async def server_restart(req: Request):
 
 
 @app.get("/api/v1.0/metrics")
+@elemento_iam.validate_request
 async def server_metrics(req: Request):
     try:
-        
-
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
         try:
             client_uuid = req.query_params.get("client_uuid")
@@ -746,6 +758,7 @@ async def server_metrics(req: Request):
 
 
 @app.get("/api/v1.0/metrics/{vm_uuid}")
+@elemento_iam.validate_request
 async def server_metrics_single(req: Request, vm_uuid: str):
     try:
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")

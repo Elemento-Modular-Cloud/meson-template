@@ -28,11 +28,14 @@ from errors.server_errors import (
     ElementoInternalServerError,
     ElementoServiceUnavailable
 )
+from commons.elemento_iam import ElementoIdentityAccessManagement
 
+elemento_iam = ElementoIdentityAccessManagement()
 app = FastAPI()
 
 
 @app.get("/")
+@elemento_iam.validate_request
 def health():
     PlainTextResponse(
         status_code=200,
@@ -41,6 +44,7 @@ def health():
 
 
 @app.get("/api/v1.0/health")
+@elemento_iam.validate_request
 def health():
     return JSONResponse(
         status_code=200,
@@ -49,6 +53,7 @@ def health():
 
 
 @app.get("/api/v1.0/info")
+@elemento_iam.validate_request
 async def storages_description(req: Request):
     try:
         info = await req.json()
@@ -86,6 +91,7 @@ async def storages_description(req: Request):
         )
 
 @app.get("/api/v1.0/info/{volume_uuid}")
+@elemento_iam.validate_request
 async def server_description_by_id(req: Request, volume_uuid: str):
     try:
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
@@ -105,10 +111,9 @@ async def server_description_by_id(req: Request, volume_uuid: str):
         )
 
 @app.get("/api/v1.0/accessible")
+@elemento_iam.validate_request
 async def storage_accessible(req: Request):
     try:
-        
-
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
         try:
             client_uuid = req.query_params.get("client_uuid")
@@ -147,6 +152,7 @@ async def storage_accessible(req: Request):
 
 
 @app.post("/api/v1.0/create")
+@elemento_iam.validate_request
 async def storage_creation(req: Request):
     try:
         storages_to_create = await req.json()
@@ -204,6 +210,7 @@ async def storage_creation(req: Request):
 
 
 @app.get("/api/v1.0/cancreate")
+@elemento_iam.validate_request
 async def storage_cancreate(req: Request):
     try:
         storages_to_create = await req.json()
@@ -263,10 +270,9 @@ async def storage_cancreate(req: Request):
 
 
 @app.delete("/api/v1.0/destroy")
+@elemento_iam.validate_request
 async def storage_destruction(req: Request):
     try:
-        
-        
         to_destroy = await req.json()
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
         try:
