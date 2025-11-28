@@ -7,11 +7,6 @@ import os
 from __init__ import __version__
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from commons.billing import (
-    add_billing_details,
-    update_billing_details,
-    get_pricing,
-)
 from commons.utils import (
     get_from_dict,
     dynamic_global_import_fun,
@@ -28,6 +23,10 @@ from errors.server_errors import (
     ElementoServiceUnavailable,
 )
 from commons.elemento_iam import ElementoIdentityAccessManagement
+from elemento_billing_manager.billing_manager import billing_manager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 root_path = ["platforms", "software"]
 prefix = "service"
@@ -239,6 +238,8 @@ async def service_description_by_id(request: Request, service: str, service_uid:
 @app.post("/api/v1.0/{service}/create")
 @elemento_iam.validate_request
 async def create_service(request: Request, service: str):
+    billing_uuid = None
+    client_uuid = None
     try:
         service_to_create = await request.json()
         service_country = (
@@ -274,40 +275,10 @@ async def create_service(request: Request, service: str):
                     service_failed=[service],
                 )
 
-        ##* START BILLING
-        try:
-            price = get_pricing(service_to_create)
-            if price is None:
-                return ElementoCreationFailed(
-                    origin="MESON",
-                    error="Config is not available",
-                    trace=traceback.format_exc(),
-                    stopped_successfully=True,
-                    billing_suspended=True,
-                    meson_source="service_creation()",
-                )
-            reseller_id = service_to_create.get("reseller_id", os.getenv("ELEMENTO_RESELLER_ID"))
-            # billing_uuid = add_billing_details(
-            #     target_entity=client_uuid,
-            #     price_json=price,
-            #     specs_json=req_data,
-            #     reseller_id=reseller_id,
-            # )
-            billing_uuid = "3c0e660f-7735-4707-9121-575eaa459745"
-        except Exception as error:
-            return ElementoCreationFailed(
-                origin="MESON",
-                error=f"Error during {service} creation (billing phase)",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                billing_suspended=True,
-                meson_source="service_creation()",
-            )
-
         ##* SETUP CONFIG
         try:
             service_config = services[service]["setup_config"](
-                req_data, client_uuid, billing_uuid, service_country
+                req_data, client_uuid, service_country
             )
         except Exception as error:
             return ElementoInternalServerError(
@@ -319,11 +290,26 @@ async def create_service(request: Request, service: str):
 
         ##* SERVICE CREATION
         try:
+            # -- START BILLING --
+            # Pick or add a service model from elemento_billing_manager directory
+            # specs = YourServiceModel(
+            #     provider=os.getenv("PROVIDER", "wasabi"),
+            #     region=service_to_create.get("region", os.getenv("WASABI_DEFAULT_REGION", "eu-central-1")),
+            #     versioning_enabled=False,
+            #     max_quota_gb=400,
+            # )
+            specs = None
+            billing_uuid = billing_manager.start(client_uuid, specs, "storage", "objectstorage", None) #TODO: capire come passare i parametri corretti
+            # -------------------
+
             service_created, status_code = services[service]["create"](
-                service_config, service_country
+                service_config, client_uuid, billing_uuid
             )
         except Exception as error:
-            # update_billing_details(billing_uuid, status="ended", reseller_id=reseller_id)
+            # -- STOP BILLING --
+            billing_manager.stop(billing_uuid, client_uuid)
+            # ------------------
+            logging.error(f"Error during {service} creation: {error.__str__()}")
             return ElementoCreationFailed(
                 origin="MESON",
                 error=f"Error during {service} creation",
@@ -336,6 +322,10 @@ async def create_service(request: Request, service: str):
         if status_code==200:
             return JSONResponse(status_code=status_code, content=service_created.to_json())
         else:
+            # -- STOP BILLING --
+            billing_manager.stop(billing_uuid, client_uuid)
+            # ------------------
+            logging.error("Service creation failed: %s", service_created)
             return ElementoInternalServerError(
                 origin="PROVIDER",
                 error = f"Internal Server Error: {service_created}",
@@ -344,6 +334,9 @@ async def create_service(request: Request, service: str):
             )
 
     except Exception as error:
+        # -- STOP BILLING --
+        billing_manager.stop(billing_uuid, client_uuid)
+        # ------------------    
         logging.error(error.__str__())
         return ElementoInternalServerError(
             origin="MESON",
@@ -356,6 +349,7 @@ async def create_service(request: Request, service: str):
 @app.delete("/api/v1.0/{service}/delete")
 @elemento_iam.validate_request
 async def delete_service(request: Request, service: str):
+    billing_uuid = None
     try:
         service_to_delete = await request.json()
         service_country = (
@@ -430,38 +424,25 @@ async def delete_service(request: Request, service: str):
             response, status_code = services[service]["delete"](
                 service_uid, client_uuid, service_country
             )
+            if status_code == 200:
+                # -- STOP BILLING --
+                billing_manager.stop(billing_uuid, client_uuid)
+                # ------------------
+                return JSONResponse(
+                    status_code=200,
+                    content=f"{service} with id {service_to_delete.get("service_uuid")} deleted successfully",
+                )
+            else:
+                return ElementoInternalServerError(
+                    origin="PROVIDER",
+                    error=f"Internal Server Error: {response}",
+                    trace=traceback.format_exc(),
+                    meson_source="delete_service()",
+                )
         except Exception as error:
             return ElementoInternalServerError(
                 origin="MESON",
                 error=f"Error during {service} delete",
-                trace=traceback.format_exc(),
-                meson_source="delete_service()",
-            )
-
-        try:
-            reseller_id = service_to_delete.get("reseller_id", os.getenv("ELEMENTO_RESELLER_ID"))
-            # update_billing_details(
-            #     billing_uuid=billing_uuid,
-            #     status="ended",
-            #     reseller_id=reseller_id,
-            # )
-        except Exception as error:
-            return ElementoInternalServerError(
-                origin="MESON",
-                error=f"Error during {service} stop billing",
-                trace=traceback.format_exc(),
-                meson_source="delete_service()",
-            )
-
-        if status_code == 200:
-            return JSONResponse(
-                status_code=200,
-                content=f"{service} {get_from_dict(service_to_delete, 'id')} deleted successfully",
-            )
-        else:
-            return ElementoInternalServerError(
-                origin="PROVIDER",
-                error = f"Internal Server Error: {response}",
                 trace=traceback.format_exc(),
                 meson_source="delete_service()",
             )

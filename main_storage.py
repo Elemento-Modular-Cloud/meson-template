@@ -6,7 +6,6 @@ import os
 from __init__ import __version__
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from commons.billing import add_billing_details, update_billing_details, get_pricing
 from commons.utils import check_storage_params, check_storage_tolerance, get_from_dict
 from models.StorageModel import ElementoStorage
 from infrastructure.storage.storage_manager import (
@@ -29,6 +28,10 @@ from errors.server_errors import (
     ElementoServiceUnavailable
 )
 from commons.elemento_iam import ElementoIdentityAccessManagement
+from elemento_billing_manager.billing_manager import billing_manager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 elemento_iam = ElementoIdentityAccessManagement()
 app = FastAPI()
@@ -154,6 +157,8 @@ async def storage_accessible(req: Request):
 @app.post("/api/v1.0/create")
 @elemento_iam.validate_request
 async def storage_creation(req: Request):
+    billing_uuid = None
+    client_uuid = None
     try:
         storages_to_create = await req.json()
         async_flag = "false"
@@ -182,14 +187,28 @@ async def storage_creation(req: Request):
             )
 
         try:
-            storage = create_storage(storage_data, service_country)
+            # -- START BILLING --
+            # Pick or add a service model from elemento_billing_manager directory
+            # specs = YourServiceModel(
+            #     provider=os.getenv("PROVIDER", "wasabi"),
+            #     region=service_to_create.get("region", os.getenv("WASABI_DEFAULT_REGION", "eu-central-1")),
+            #     versioning_enabled=False,
+            #     max_quota_gb=400,
+            # )
+            specs = None
+            billing_uuid = billing_manager.start(client_uuid, specs, "storage", "objectstorage", None)
+            # -------------------
+            storage = create_storage(storage_data, service_country, billing_uuid)
             if not check_storage_params(storage):
                 raise Exception(
                     "Some mandatory Storage params are missing (volume_uuid, billing_uuid, creator_id, name, size)"
                 )
             return JSONResponse(content=storage.to_json_response(), status_code=200)
         except Exception as error:
-            # update_billing_details(billing_uuid, "ended")
+            # -- STOP BILLING --
+            billing_manager.stop(billing_uuid, client_uuid)
+            # ------------------
+            logging.error(f"Error during storage creation: {error.__str__()}")
             return ElementoCreationFailed(
                 origin="MESON",
                 error="Error during storage creation",
@@ -200,6 +219,9 @@ async def storage_creation(req: Request):
             )
 
     except Exception as error:
+        # -- STOP BILLING --
+        billing_manager.stop(billing_uuid, client_uuid)
+        # ------------------    
         logging.error(error.__str__())
         return ElementoInternalServerError(
             origin="MESON",
@@ -246,18 +268,7 @@ async def storage_cancreate(req: Request):
                 meson_source="storage_cancreate()",
             )
 
-        price = get_pricing(storage_config.to_json())
-        if price is None:
-            return ElementoCreationFailed(
-                origin="MESON",
-                error="Price is not available",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                billing_suspended=True,
-                meson_source="storage_cancreate()",
-            )
-
-        return JSONResponse(content=price, status_code=200)
+        return JSONResponse(content=None, status_code=200)
 
     except Exception as error:
         logging.error(error.__str__())
@@ -272,6 +283,7 @@ async def storage_cancreate(req: Request):
 @app.delete("/api/v1.0/destroy")
 @elemento_iam.validate_request
 async def storage_destruction(req: Request):
+    billing_uuid = None
     try:
         to_destroy = await req.json()
         service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
@@ -316,8 +328,9 @@ async def storage_destruction(req: Request):
             )
 
         try:
-            print("Billing stop")
-            # update_billing_details(storage_config.billing_uuid, status="STOP")
+            # -- STOP BILLING --
+            billing_manager.stop(storage_config.billing_uuid, client_uuid)
+            # ------------------
         except Exception as error:
             return ElementoBillingFailed(
                 origin="MESON",

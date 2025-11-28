@@ -13,11 +13,6 @@ from commons.utils import (
     check_vm_tolerance,
     check_vm_params
 )
-from commons.billing import (
-    add_billing_details,
-    update_billing_details,
-    get_pricing,
-)
 from models.ComputeModel import (
     ElementoMachine,
     ElementoCpu,
@@ -51,6 +46,10 @@ from errors.client_errors import (
     ElementoTooEarly,
 )
 from commons.elemento_iam import ElementoIdentityAccessManagement
+from elemento_billing_manager.billing_manager import billing_manager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 elemento_iam = ElementoIdentityAccessManagement()
 app = FastAPI(docs_url=None)
@@ -183,6 +182,8 @@ async def servers_description(req: Request):
 @app.post("/api/v1.0/register")
 @elemento_iam.validate_request
 async def server_creation(req: Request):
+    billing_uuid = None
+    client_uuid = None
     try:
         servers_to_create = await req.json()
         async_flag = "false"
@@ -304,7 +305,18 @@ async def server_creation(req: Request):
 
         # CREATE MACHINE
         try:
-            vm_uuid = create_compute_machine(vm_data, service_country)
+            # -- START BILLING --
+            # Pick or add a service model from elemento_billing_manager directory
+            # specs = YourServiceModel(
+            #     provider=os.getenv("PROVIDER", "wasabi"),
+            #     region=service_to_create.get("region", os.getenv("WASABI_DEFAULT_REGION", "eu-central-1")),
+            #     versioning_enabled=False,
+            #     max_quota_gb=400,
+            # )
+            specs = None
+            billing_uuid = billing_manager.start(client_uuid, specs, "matcher", "vm", None)
+            # -------------------
+            vm_uuid = create_compute_machine(vm_data, service_country, billing_uuid)
             return JSONResponse(
                 content={
                     "vm_uuid": vm_uuid,
@@ -313,7 +325,10 @@ async def server_creation(req: Request):
                 status_code=202,
             )
         except Exception as error:
-            # update_billing_details(billing_uuid, "ended")
+            # -- STOP BILLING --
+            billing_manager.stop(billing_uuid, client_uuid)
+            # ------------------
+            logging.error(f"Error during vm creation: {error.__str__()}")
             return ElementoCreationFailed(
                 origin="MESON",
                 error="Error during actual creation",
@@ -323,11 +338,11 @@ async def server_creation(req: Request):
                 meson_source="server_creation()"
             )
 
-        created_machine.creation_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return JSONResponse(content=created_machine.to_json_register(), status_code=200)
-
     except Exception as error:
-        logging.error(error.__str__())
+        # -- STOP BILLING --
+        billing_manager.stop(billing_uuid, client_uuid)
+        # ------------------
+        logging.error("Service creation failed: %s", error)
         return ElementoInternalServerError(
             origin="MESON",
             error=f"Internal Server Error - {error.__str__()}",
@@ -339,6 +354,7 @@ async def server_creation(req: Request):
 @app.get("/api/v1.0/canallocate")
 @elemento_iam.validate_request
 async def cancreate(req: Request):
+    billing_uuid = None
     try:
         servers_to_create = await req.json()
         service_country = req.headers["service-country"] if "service-country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
@@ -464,24 +480,12 @@ async def cancreate(req: Request):
                 billing_suspended=True,
                 meson_source="cancreate()",
             )
-
-        # GET PRICING
-        price = get_pricing(vm_config.to_json())
-        if price is None:
-            return ElementoCreationFailed(
-                origin="MESON",
-                error="Price is not available",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                billing_suspended=True,
-                meson_source="cancreate()",
-            )
-
+        
         return JSONResponse(
             status_code=200,
             content={
                 "config": vm_config.to_json(),
-                "info": vm_config.to_json_canallocate(price=price),
+                "info": vm_config.to_json_canallocate(price=None),
             },
         )
 
@@ -552,7 +556,7 @@ async def server_destruction(req: Request):
             )
 
         try:
-            response = destroy_server(client_uuid, vm_uuid, service_country)
+            billing_uuid = destroy_server(client_uuid, vm_uuid, service_country)
         except Exception as error:
             return ElementoInternalServerError(
                 origin="MESON",
@@ -562,8 +566,9 @@ async def server_destruction(req: Request):
             )
 
         try:
-            print("Billing stop")
-            # update_billing_details(machine_config.billing_uuid, status="STOP")
+            # -- STOP BILLING --
+            billing_manager.stop(billing_uuid, client_uuid)
+            # ------------------
         except Exception as error:
             return ElementoBillingFailed(
                 origin="MESON",
@@ -573,7 +578,7 @@ async def server_destruction(req: Request):
             )
 
         return JSONResponse(
-            status_code=200, content={"unregistered": response, "uniqueID": vm_uuid}
+            status_code=200, content={"unregistered": billing_uuid, "uniqueID": vm_uuid}
         )
 
     except Exception as error:
