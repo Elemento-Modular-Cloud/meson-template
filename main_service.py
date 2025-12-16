@@ -59,7 +59,6 @@ elemento_iam = ElementoIdentityAccessManagement()
 
 # This is an example implementation for the routing of services supported on this specific provider.
 
-
 @app.get("/")
 @elemento_iam.validate_request
 async def health():
