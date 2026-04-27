@@ -57,19 +57,30 @@ except Exception as error:
 app = FastAPI(docs_url=None)
 elemento_iam = ElementoIdentityAccessManagement()
 
+class HealthCheckFilter(logging.Filter):
+    """Filter to skip logging for health check and root endpoints"""
+
+    def filter(self, record):
+        msg = record.getMessage()
+        # Skip root endpoint (GET /) and health endpoint
+        return not any(path in msg for path in ["GET /api/v1.0/health", "GET / HTTP/1.1"])
+
+
+uvicorn_logger = logging.getLogger("uvicorn.access")
+uvicorn_logger.addFilter(HealthCheckFilter())
+
+
 # This is an example implementation for the routing of services supported on this specific provider.
 
 @app.get("/")
-@elemento_iam.validate_request
 async def health():
     PlainTextResponse(
         status_code=200,
-        content=f"Hello, world! This is an Elemento Services Meson for provider {os.getenv("PROVIDER")}.",
+        content=f"Hello, world! This is an Elemento Services Meson for provider {os.getenv('PROVIDER')}.",
     )
 
 
 @app.get("/api/v1.0/health")
-@elemento_iam.validate_request
 def health():
     return JSONResponse(
         status_code=200,
