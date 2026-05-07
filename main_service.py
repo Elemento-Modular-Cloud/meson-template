@@ -1,3 +1,4 @@
+import io
 import json
 import traceback
 import logging
@@ -6,7 +7,7 @@ import os
 
 from __init__ import __version__
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from commons.utils import (
     get_from_dict,
     dynamic_global_import_fun,
@@ -25,6 +26,7 @@ from errors.server_errors import (
 from commons.elemento_iam import ElementoIdentityAccessManagement
 from elemento_billing_manager.billing_manager import billing_manager
 from dotenv import load_dotenv
+from typing import Any
 
 load_dotenv()
 
@@ -464,4 +466,190 @@ async def delete_service(request: Request, service: str):
             error="Internal Server Error",
             trace=traceback.format_exc(),
             meson_source="delete_service()",
+        )
+
+
+@app.get("/api/v1.0/{service}/credentials/{service_uuid}")
+@elemento_iam.validate_request
+async def get_credentials_route(request: Request, service: str, service_uuid: str, token: Any = None):
+    try:
+        client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
+        client_uuid = str(uuid.UUID(client_uuid))
+
+        ##* Verify presence of service
+        if services.get(service) is None:
+            try:
+                services[service] = try_dynamic_import_fun(
+                    folder_path=root_path,
+                    prefix=prefix,
+                    service_name=service,
+                    methods=methods,
+                )
+            except Exception as error:
+                return ElementoServiceUnavailable(
+                    origin="MESON",
+                    error="Service unavailable",
+                    trace=traceback.format_exc(),
+                    meson_source="delete_service()",
+                    service_failed=[service],
+                )
+        
+        if service_uuid is None:
+            return ElementoBadRequest(
+                origin="MESON",
+                error="Bad Request",
+                field_errors=[
+                    BadRequestFieldError(
+                        field="id",
+                        where="BODY",
+                        error="MISSING",
+                        type="str",
+                        expected_value="",
+                    )
+                ],
+                docs_url="",
+                trace=traceback.format_exc(),
+                meson_source="delete_service()",
+            )
+            
+        try:
+            creds_response, status_code = services[service]["get_credentials"](client_uuid, service_uuid)
+        except Exception:
+            return ElementoInternalServerError(
+                origin="MESON",
+                error=f"Error during key rotation for {service_uuid}",
+                trace=traceback.format_exc(),
+                meson_source="get_credentials()",
+            )
+
+        if status_code in [200, 201]:
+            file_stream = io.StringIO(creds_response)
+
+            return StreamingResponse(
+                iter([file_stream.getvalue()]),
+                media_type="text/plain",
+                headers={"Content-Disposition": f"attachment; filename=credentials_{service_uuid}.txt"},
+            )
+        elif status_code == 400:
+            return ElementoBadRequest(
+                origin="PROVIDER",
+                error=creds_response.get("error", f"{service} in creation: {service_uuid}"),
+                field_errors=[],
+                docs_url="",
+                trace=traceback.format_exc(),
+                meson_source="get_credentials()",
+            )
+        elif status_code in [403, 404]:
+            return ElementoNotFound(
+                origin="PROVIDER",
+                error=f"{service} not found: {service_uuid}",
+                trace=traceback.format_exc(),
+                meson_source="get_credentials()",
+            )
+
+        else:
+            return ElementoInternalServerError(
+                origin="PROVIDER",
+                error=f"Internal Server Error: {creds_response}",
+                trace="",
+                meson_source="get_credentials()",
+            )
+
+    except Exception as error:
+        logging.error(f"get_credentials_route - {str(error)}")
+        return ElementoInternalServerError(
+            origin="MESON",
+            error="Internal Server Error",
+            trace=traceback.format_exc(),
+            meson_source="get_credentials_route()",
+            headers={"error": str(error)},
+        )
+
+
+@app.post("/api/v1.0/{service}/cancreate")
+@elemento_iam.validate_request
+async def cancreate(request: Request, service: str, token: Any = None):
+    try:
+        payload = await request.json()
+        client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
+        client_uuid = str(uuid.UUID(client_uuid))
+        region = payload.get("region")
+
+        try:
+            current_service = services.get(service)
+            if not current_service:
+                raise ValueError(f"Service {service} not found")
+        except Exception:
+            return ElementoServiceUnavailable(
+                origin="MESON",
+                error="Service unavailable",
+                trace=traceback.format_exc(),
+                meson_source="get_service_or_import()",
+                service_failed=[service],
+            )
+
+        try:
+            cancreate_res, status_code = current_service["cancreate"](payload)
+        except Exception as e:
+            return ElementoInternalServerError(
+                origin="MESON",
+                error=f"Error during getting create options for {service}: {str(e)}",
+                trace=traceback.format_exc(),
+                meson_source="cancreate()",
+            )
+
+        price_value = None
+        if status_code == 200:
+            try:
+                price_info = billing_manager.get_price(
+                    payload=cancreate_res.get("payload"),
+                    service_type="service",
+                    service_sub_type=service,
+                    client_uuid=client_uuid,
+                    org=token.elemento_org or None,
+                    provider=os.getenv("PROVIDER", "upcloud"),
+                    region=region,
+                    interval=payload.get("billing_frequency"),
+                )
+
+                if isinstance(price_info, dict):
+                    price_value = price_info.get("total_net")
+
+            except Exception as e:
+                price_value = None
+                cancreate_res['cancreate'] = False
+                logging.error(f"Error fetching price info: {str(e)}")
+
+            return {
+                "cancreate": cancreate_res.get("cancreate"),
+                "billing": [{"price_net": price_value, "period": payload.get("billing_frequency")}],
+                "provider": os.getenv("PROVIDER", "upcloud"),
+            }
+
+        elif status_code == 400:
+            logging.error(f"Error in cancreate {cancreate_res.get('error')} for service {service}")
+            return {
+                "cancreate": cancreate_res.get("cancreate"),
+                "billing": [],
+                "provider": os.getenv("PROVIDER", "upcloud"),
+            }
+
+        else:
+            return ElementoBadRequest(
+                origin="PROVIDER",
+                error=cancreate_res.get("error", f"Bad request for {service}"),
+                field_errors=[],
+                docs_url="",
+                trace=traceback.format_exc(),
+                meson_source="cancreate()",
+            )
+
+    except Exception as error:
+        logging.error(f"cancreate generic error - {str(error)}")
+        return ElementoInternalServerError(
+            origin="MESON",
+            error="Internal Server Error",
+            trace=traceback.format_exc(),
+            meson_source="cancreate()",
+            headers={"error": str(error)},
         )

@@ -113,6 +113,33 @@ def delete(service_id: str, client_uuid: str, service_credentials: str = None, s
     
     except Exception as e:
         return {"error": f"Error in service deletion - {e}"}, 500
+    
+
+def cancreate(service_config: ExampleModel, service_country: str) -> bool:
+    """
+    Checks if the provided service_config can be created with the provider offering.
+    """
+    return True
+
+
+def get_credentials(service_id: str, client_uuid: str, service_credentials: str = None, service_country: str = None) -> tuple:
+    """
+    Retrieve the credentials of a service.
+    Args:
+        service_id (str): The service id to retrieve credentials.
+        client_uuid (str): Client indetifier.
+        service_country (str): optional, region to use.
+    Returns:
+        tuple: (The response data with the credentials, status_code)
+    """
+    try:
+        credentials = {}
+        # Insert here the code to retrieve the credentials of the service
+
+        return credentials, 200
+    
+    except Exception as e:
+        return {"error": f"Error in retrieve credentials - {e}"}, 500
 
 
 # ------------------------ UTILS FUNCTIONS ------------------------
