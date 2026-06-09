@@ -29,3 +29,4 @@ python-dotenv==1.1.0
 pyotp==2.9.0
 pyjwt==2.10.1
 cryptography==36.0.1
+asgi-correlation-id==5.0.0

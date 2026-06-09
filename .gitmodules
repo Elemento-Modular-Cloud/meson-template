@@ -4,3 +4,6 @@
 [submodule "elemento_billing_manager"]
 	path = elemento_billing_manager
 	url = git@github.com:Elemento-Modular-Cloud/elemento-billing-manager.git
+[submodule "elogger"]
+	path = elogger
+	url = git@github.com:Elemento-Modular-Cloud/elogger.git

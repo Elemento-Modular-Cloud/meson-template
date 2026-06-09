@@ -27,6 +27,8 @@ from commons.elemento_iam import ElementoIdentityAccessManagement
 from elemento_billing_manager.billing_manager import billing_manager
 from dotenv import load_dotenv
 from typing import Any
+from elogger.logger_manager_fastapi import setup_logging
+from asgi_correlation_id import CorrelationIdMiddleware
 
 load_dotenv()
 
@@ -58,6 +60,14 @@ except Exception as error:
 
 app = FastAPI(docs_url=None)
 elemento_iam = ElementoIdentityAccessManagement()
+setup_logging()
+
+app.add_middleware(
+    CorrelationIdMiddleware,
+    header_name="X-Request-ID",
+    update_request_header=True,
+)
+
 
 class HealthCheckFilter(logging.Filter):
     """Filter to skip logging for health check and root endpoints"""
