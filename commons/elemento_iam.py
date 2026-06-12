@@ -2,11 +2,18 @@ import jwt
 import time
 import uuid
 import requests
+import logging
+import os
+
 from fastapi import Request
 from functools import wraps
 from typing import Optional, Union
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
+from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+load_dotenv()
 
 REQUEST_VERIFY = False
 
@@ -33,7 +40,7 @@ class AccessToken(BaseModel):
     iat: int
     jti: str
     iss: str
-    aud: Union[list[str], str]
+    aud: Optional[Union[list[str], str]] = None
     sub: str
     typ: str
     azp: str
@@ -41,15 +48,16 @@ class AccessToken(BaseModel):
     acr: str
     allowed_origins: list[str] = []
     realm_access: RealmAccess
-    resource_access: dict[str, ResourceRoles]
+    # resource_access: dict[str, ResourceRoles]
     scope: str
     email_verified: bool
+    elemento_role: str
     name: str
+    client_uuid: str
     preferred_username: str
     given_name: str
     family_name: str
     email: str
-    client_uuid: str
     elemento_org: Optional[str] = None
     elemento_managed_members: Optional[list[str]] = []
 
@@ -70,13 +78,27 @@ class ElementoIdentityAccessManagement:
         self,
         keycloak_target_client_id: str = "portal-internal-client",
         keycloak_realm: str = "portal",
-        keycloak_url: str = "https://idp.elemento.cloud",
         jwks_cache_ttl: int = 300,
         get_local_ips_fun=None,
     ):
+
+        env = os.getenv("ENV", "development")
+        dev_url = os.getenv("DEV_PORTAL_URL", "https://beta.portal.elemento.cloud:9999/api/v2")
+        prod_url = os.getenv("PROD_PORTAL_URL", "https://portal.elemento.cloud/api/v1")
+
+        raw_url = dev_url if env in ["development", "local"] else prod_url
+
+        base_url = raw_url.split("/api/")[0].rstrip("/")
+
+        if env in ["development", "local"]:
+            parsed = urlparse(base_url)
+            self.keycloak_url = f"{parsed.scheme}://{parsed.hostname}:8444"
+        else:
+            self.keycloak_url = "https://elemento-portal.idp.cloud"
+
+        logging.debug("keycloak URL: %s", self.keycloak_url)
         self.keycloak_target_client_id = keycloak_target_client_id
         self.keycloak_realm = keycloak_realm
-        self.keycloak_url = keycloak_url
         self.jwks_url = f"{self.keycloak_url}/realms/{self.keycloak_realm}/protocol/openid-connect/certs"
         self.jwks_cache_ttl = jwks_cache_ttl
         self._jwks_cache_iat = 0
@@ -107,7 +129,13 @@ class ElementoIdentityAccessManagement:
                 raise ElementoIdentityAccessManagementException(f"Key ID '{kid}' not found in JWKS")
 
             public_key = jwt.algorithms.RSAAlgorithm.from_jwk(jwk)  ##? convert JWK to RSA public key
-            payload = jwt.decode(token, public_key, algorithms=["RS256"], issuer=expected_issuer, audience=expected_audience)
+            payload = jwt.decode(
+                token,
+                public_key,
+                algorithms=["RS256"],
+                issuer=expected_issuer,
+                options={"verify_aud": False},
+            )
             access_token = AccessToken(**payload)
 
             now = int(time.time())
@@ -134,7 +162,6 @@ class ElementoIdentityAccessManagement:
                 else [access_token.elemento_managed_members, access_token.client_uuid]
             )
         ]
-
         if isinstance(client_scope, list):
             return all(uuid.UUID(client_uuid) in allowed_scope for client_uuid in client_scope)
         else:
@@ -185,20 +212,33 @@ class ElementoIdentityAccessManagement:
 
             try:
                 access_token = self._validate_token(encoded_token)
+                kwargs["token"] = access_token
             except ElementoIdentityAccessManagementException as e:
+                logging.error(str(e))
                 return JSONResponse(status_code=401, content={"error": str(e)})
 
             client_uuid = req.headers.get("client_uuid")
             if client_uuid is None:
-                return func(*args, **kwargs)
-            
+                return await func(*args, **kwargs)
+
             try:
                 if not self._client_authorization(access_token, client_uuid):
                     ##? Using 403 as status code implies a block of the service (WIP)
                     return JSONResponse(status_code=403, content={"error": "Unauthorized"})
             except ValueError:
                 return JSONResponse(status_code=400, content={"error": "Invalid UUID format in access token or in payload"})
-            
+
             return await func(*args, **kwargs)
-        
+
         return wrapper
+
+    def get_token_data(self, request: Request) -> AccessToken:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise ElementoIdentityAccessManagementException("Missing or invalid Authorization header")
+
+        try:
+            token = auth_header.split(" ", 1)[1]
+            return self._validate_token(token)
+        except (IndexError, AttributeError):
+            raise ElementoIdentityAccessManagementException("Invalid token format")

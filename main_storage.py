@@ -1,42 +1,33 @@
 import logging
-import traceback
-import uuid
 import os
+import traceback
+from typing import Any
+import httpx
 
-from __init__ import __version__
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from commons.utils import check_storage_params, check_storage_tolerance, get_from_dict
-from models.StorageModel import ElementoStorage
-from infrastructure.storage.storage_manager import (
-    information_about_storages_by_id,
-    information_about_storages_by_client_id,
-    is_storage_available,
-    create_storage,
-    destroy_storage,
-)
-from errors.client_errors import (
-    ElementoBadRequest,
-    ElementoNotFound,
-    ElementoTooEarly,
-    BadRequestFieldError
-)
-from errors.server_errors import (
-    ElementoBillingFailed,
-    ElementoCreationFailed,
-    ElementoInternalServerError,
-    ElementoServiceUnavailable
-)
+
+from __init__ import __version__
 from commons.elemento_iam import ElementoIdentityAccessManagement
-from elemento_billing_manager.billing_manager import billing_manager
-from dotenv import load_dotenv
+from elemento_billing_manager.billing_manager import BillingStatus, billing_manager
+from errors.client_errors import ElementoBadRequest, ElementoNotFound
+from errors.server_errors import ElementoCreationFailed, ElementoInternalServerError
+from infrastructure.storage.storage_manager import (
+    create_storage,
+    delete_storage,
+    list_storage,
+    get_storage_by_uuid,
+    is_storage_config_available,
+)
+from models.StorageModel import Storage
 from elogger.logger_manager_fastapi import setup_logging
 from asgi_correlation_id import CorrelationIdMiddleware
 
 load_dotenv()
 
 elemento_iam = ElementoIdentityAccessManagement()
-app = FastAPI()
+app = FastAPI(docs_url=None)
 setup_logging()
 
 app.add_middleware(
@@ -45,330 +36,303 @@ app.add_middleware(
     update_request_header=True,
 )
 
-
 class HealthCheckFilter(logging.Filter):
-    """Filter to skip logging for health check and root endpoints"""
-
     def filter(self, record):
         msg = record.getMessage()
-        # Skip root endpoint (GET /) and health endpoint
         return not any(path in msg for path in ["GET /api/v1.0/health", "GET / HTTP/1.1"])
-
 
 uvicorn_logger = logging.getLogger("uvicorn.access")
 uvicorn_logger.addFilter(HealthCheckFilter())
 
 
 @app.get("/")
-def health():
-    PlainTextResponse(
+async def root(token: Any = None):
+    return PlainTextResponse(
         status_code=200,
-        content=f"Hello, world! This is an Elemento Storage Meson for provider {os.getenv('PROVIDER')}",
+        content=f"Hello, world! This is an Elemento Storage Meson for provider {os.getenv('PROVIDER', 'gcp')}.",
     )
 
 
 @app.get("/api/v1.0/health")
-def health():
+def health(token: Any = None):
+    # TODO: perform a GET request and check the response to ensure the provider is healthy
     return JSONResponse(
         status_code=200,
-        content={"status": "UP", "version": __version__},
+        content={"status": "UP", "version": __version__, "provider_status": "TODO"},
     )
 
 
-@app.get("/api/v1.0/info")
+@app.post("/api/v1.0/info")
 @elemento_iam.validate_request
-async def storages_description(req: Request):
+async def route_get_storage_by_uuid(request: Request, token: Any = None):
     try:
-        info = await req.json()
-        service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
-        try:
-            volume_uuid = get_from_dict(info, "volume_uuid")
-        except Exception as error:
-            return ElementoBadRequest(
+        info = await request.json()
+        volume_uuid = info['volume_id']
+        response = get_storage_by_uuid(volume_uuid)
+        if response is None:
+            return ElementoNotFound(
                 origin="MESON",
-                error="Bad request - bad payload",
-                field_errors=[
-                    BadRequestFieldError(
-                        field="volume_uuid",
-                        where="BODY",
-                        error="MISSING",
-                        type="UUID",
-                        expected_value=""
-                    )
-                ],
-                docs_url="",
+                error="Volume not found",
                 trace=traceback.format_exc(),
-                meson_source="storage_accessible()"
             )
-
-        response = information_about_storages_by_id(volume_uuid, service_country)
-        return JSONResponse(response.to_json_response(), status_code=200)
-
-    except Exception as error:
-        logging.error(error.__str__())
+        return JSONResponse(content=response.to_json_response(), status_code=200)
+    except Exception as ex:
+        logging.error(ex.__str__())
         return ElementoInternalServerError(
             origin="MESON",
-            error=f"Internal Server Error - {error.__str__()}",
+            error=f"Internal Server Error - {ex}",
             trace=traceback.format_exc(),
-            meson_source="storage_destruction()"
         )
 
-@app.get("/api/v1.0/info/{volume_uuid}")
+
+@app.post("/api/v1.0/accessible")
 @elemento_iam.validate_request
-async def server_description_by_id(req: Request, volume_uuid: str):
+async def route_list_storage(request: Request, token: Any = None):
     try:
-        service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
-        response = information_about_storages_by_id(volume_uuid=volume_uuid, service_country=service_country)
-
-        return JSONResponse(
-            status_code=200, content=response.to_json_response()
-        )
-
-    except Exception as error:
-        logging.error(error.__str__())
-        return ElementoInternalServerError(
+        accessible_json = await request.json()
+        client_uuid = accessible_json["client_uid"]
+    except Exception as ex:
+        logging.error(ex.__str__())
+        return ElementoBadRequest(
             origin="MESON",
-            error=f"Internal Server Error - {error.__str__()}",
-            meson_source="server_description_by_id()",
-            trace=traceback.format_exc()
+            error=f"Bad Request - {ex}",
+            field_errors=[],
+            docs_url="",
+            trace=f"{traceback.format_exc()}",
+            meson_source="route_list_storage()",
         )
-
-@app.get("/api/v1.0/accessible")
-@elemento_iam.validate_request
-async def storage_accessible(req: Request):
     try:
-        service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
-        try:
-            client_uuid = req.query_params.get("client_uuid")
-        except Exception as error:
-            return ElementoBadRequest(
+        response = list_storage(client_uuid)
+        if len(response) == 0:
+            return ElementoNotFound(
                 origin="MESON",
-                error="Bad request - bad payload",
-                field_errors=[
-                    BadRequestFieldError(
-                        field="client_uuid",
-                        where="QUERY",
-                        error="MISSING",
-                        type="UUID",
-                        expected_value=""
-                    )
-                ],
-                docs_url="",
+                error="Volume not found",
                 trace=traceback.format_exc(),
-                meson_source="storage_accessible()"
             )
-
-        client_volumes = information_about_storages_by_client_id(client_uuid, service_country)
-        response = []
-        for volume in client_volumes:
-            response.append(volume.to_json_response())
-        return JSONResponse(response, status_code=200)
-
-    except Exception as error:
-        logging.error(error.__str__())
+        volumes_out = [volume.to_json_response() for volume in response]
+        return JSONResponse(content=volumes_out, status_code=200)
+    except Exception as ex:
+        logging.error(ex.__str__())
         return ElementoInternalServerError(
             origin="MESON",
-            error=f"Internal Server Error - {error.__str__()}",
+            error=f"Internal Server Error - {ex}",
             trace=traceback.format_exc(),
-            meson_source="storage_destruction()"
-        )
-
-
-@app.post("/api/v1.0/create")
-@elemento_iam.validate_request
-async def storage_creation(req: Request):
-    billing_uuid = None
-    client_uuid = None
-    try:
-        storages_to_create = await req.json()
-        async_flag = "false"
-        if req.headers.get("Async") is not None:
-            async_flag = req.headers.get("Async")
-        service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
-        try:
-            storage_data = ElementoStorage(
-                csp_region=service_country,
-                creator_id=get_from_dict(storages_to_create, "creatorID"),
-                name=get_from_dict(storages_to_create, "name"),
-                size=get_from_dict(storages_to_create, "size"),
-                private=storages_to_create.get("private"),
-                readonly=storages_to_create.get("readonly"),
-                shareable=storages_to_create.get("shareable"),
-                bootable=storages_to_create.get("bootable"),
-            )
-        except Exception as error:
-            return ElementoBadRequest(
-                origin="MESON",
-                error="Bad request - bad payload",
-                field_errors=[],
-                docs_url="",
-                trace=traceback.format_exc(),
-                meson_source="storage_creation()"
-            )
-
-        try:
-            # -- START BILLING --
-            # Pick or add a service model from elemento_billing_manager directory
-            # specs = YourServiceModel(
-            #     provider=os.getenv("PROVIDER", "wasabi"),
-            #     region=service_to_create.get("region", os.getenv("WASABI_DEFAULT_REGION", "eu-central-1")),
-            #     versioning_enabled=False,
-            #     max_quota_gb=400,
-            # )
-            specs = None
-            billing_uuid = billing_manager.start(client_uuid, specs, "storage", "objectstorage", None)
-            # -------------------
-            storage = create_storage(storage_data, service_country, billing_uuid)
-            if not check_storage_params(storage):
-                raise Exception(
-                    "Some mandatory Storage params are missing (volume_uuid, billing_uuid, creator_id, name, size)"
-                )
-            return JSONResponse(content=storage.to_json_response(), status_code=200)
-        except Exception as error:
-            # -- STOP BILLING --
-            billing_manager.stop(billing_uuid, client_uuid)
-            # ------------------
-            logging.error(f"Error during storage creation: {error.__str__()}")
-            return ElementoCreationFailed(
-                origin="MESON",
-                error="Error during storage creation",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                billing_suspended=True,
-                meson_source="storage_creation()"
-            )
-
-    except Exception as error:
-        # -- STOP BILLING --
-        billing_manager.stop(billing_uuid, client_uuid)
-        # ------------------    
-        logging.error(error.__str__())
-        return ElementoInternalServerError(
-            origin="MESON",
-            error=f"Internal Server Error - {error.__str__()}",
-            trace=traceback.format_exc(),
-            meson_source="storage_creation()"
         )
 
 
 @app.get("/api/v1.0/cancreate")
 @elemento_iam.validate_request
-async def storage_cancreate(req: Request):
+async def route_cancreate_storage(request: Request, token: Any = None):
+    config = await request.json()
     try:
-        storages_to_create = await req.json()
-        service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
+        size = config["size"]
+    except Exception as ex:
+        logging.error(ex.__str__())
+        return ElementoBadRequest(
+            origin="MESON",
+            error=f"Bad Request - {ex}",
+            field_errors=[],
+            docs_url="",
+            trace=f"{traceback.format_exc()}",
+            meson_source="route_cancreate_storage()",
+        )
+
+    is_available = is_storage_config_available(int(size))
+    
+    if is_available is True:
+        return JSONResponse(content=config, status_code=200)
+    else:
+        return JSONResponse(content={'data': 'creation not available'}, status_code=400)
+
+
+@app.post("/api/v1.0/create")
+@elemento_iam.validate_request
+async def route_create_storage(request: Request, token: Any = None):
+    create_json = await request.json()
+
+    interval = "month"
+    org = token.elemento_org
+    client_uuid = token.client_uuid
+    role = token.elemento_role.lower()
+
+    billing_uuid = create_json.get("billing_uuid", None)
+    parent_billing_uuid = create_json.get("parent_billing_uuid", None)
+
+    try:
+        if "creatorID" not in create_json and "creator_id" in create_json:
+            create_json["creatorID"] = create_json["creator_id"]
+        if "volumeID" not in create_json and "volume_uuid" in create_json:
+            create_json["volumeID"] = create_json["volume_uuid"]
+
+        storage_data = Storage.from_json(create_json)
+        storage_data.creator_id = create_json.get("creatorID", client_uuid)
+        
+        resolved_zone = (
+            create_json.get("region") or 
+            create_json.get("csp_region") or 
+            create_json.get("zone") or 
+            os.environ.get("PROVIDER_REGION")
+        )
+        
+        storage_data.region = resolved_zone
+        storage_data.csp_region = resolved_zone
+            
+    except Exception as ex:
+        logging.error(ex.__str__())
+        return ElementoBadRequest(
+            origin="MESON",
+            error=f"Bad Request - {ex}",
+            field_errors=[],
+            docs_url="",
+            trace=traceback.format_exc(),
+            meson_source="route_create_storage()",
+        )
+
+    try:
+        if not billing_uuid:
+            try:
+                if parent_billing_uuid:
+                    billing_uuid = billing_manager.start_sub(
+                        client_uuid=storage_data.creator_id,
+                        parent_billing_uuid=parent_billing_uuid,
+                        payload=create_json,
+                        org=org,
+                        service_type="storage",
+                        service_sub_type="blockstorage",
+                        region=storage_data.region,
+                        provider=os.getenv("PROVIDER", "gcp"),
+                    )
+                else:
+                    payment_link, billing_uuid = billing_manager.start(
+                        client_uuid=storage_data.creator_id,
+                        payload=create_json,
+                        service_type="storage",
+                        service_sub_type="blockstorage",
+                        region=storage_data.region,
+                        provider=os.getenv("PROVIDER", "gcp"),
+                        org=org,
+                        interval=interval,
+                    )
+                    return JSONResponse(status_code=202, content={"payment_url": payment_link, "billing_uuid": str(billing_uuid)})
+            except Exception as e:
+                logging.error(f"Error: {str(e)}")
+                return JSONResponse(status_code=500, content={"error": "billing_failed", "details": str(e)})
+
+        if role == 'portal' or billing_uuid:
+            storage_data.billing_uuid = billing_uuid
+            
+            if resolved_zone:
+                storage_data.region = resolved_zone
+                storage_data.csp_region = resolved_zone
+            
+            billing_manager.update_status(billing_uuid, BillingStatus.PROVISIONING)
+            disk_name = create_storage(storage_data)
+            billing_manager.update_status(billing_uuid, BillingStatus.RUNNING)
+            storage_data.name = disk_name
+            
+            return JSONResponse(content=storage_data.to_json_response(), status_code=200)
+
+    except Exception as ex:
+        if billing_uuid:
+            billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+        logging.error(f"Error during storage creation: {ex.__str__()}")
+        return ElementoCreationFailed(
+            origin="MESON",
+            error=f"Error during storage creation - {ex.__str__()}",
+            trace=traceback.format_exc(),
+            stopped_successfully=True,
+            billing_suspended=True,
+            meson_source="route_create_storage()",
+        )
+
+
+@app.post("/api/v1.0/destroy")
+@elemento_iam.validate_request
+async def route_delete_storage(request: Request, token: Any = None):
+    try:
+        role = token.elemento_role.lower()
+        client_uuid = token.client_uuid
+        to_destroy = await request.json()
+        
         try:
-            storage_data = ElementoStorage(
-                csp_region=service_country,
-                size=get_from_dict(storages_to_create, "size"),
-                private=storages_to_create.get("private"),
-                readonly=storages_to_create.get("readonly"),
-                shareable=storages_to_create.get("shareable"),
-                bootable=storages_to_create.get("bootable"),
-            )
-        except Exception as error:
+            volume_id = to_destroy["volume_id"]
+        except Exception as ex:
             return ElementoBadRequest(
                 origin="MESON",
-                error="Bad request - bad payload",
+                error=f"Bad Request - Missing volume_id: {ex}",
                 field_errors=[],
                 docs_url="",
-                trace=traceback.format_exc(),
-                meson_source="storage_cancreate()"
+                trace=f"{traceback.format_exc()}",
+                meson_source="route_delete_storage()",
             )
-        storage_config = is_storage_available(storage_data, service_country)
-        if storage_config is None or not check_storage_tolerance(
-            requested=storage_data, proposed=storage_config
-        ):
-            return ElementoCreationFailed(
-                origin="MESON",
-                error="Config is not available",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                billing_suspended=True,
-                meson_source="storage_cancreate()",
-            )
-
-        return JSONResponse(content=None, status_code=200)
-
-    except Exception as error:
-        logging.error(error.__str__())
-        return ElementoInternalServerError(
-            origin="MESON",
-            error=f"Internal Server Error - {error.__str__()}",
-            trace=traceback.format_exc(),
-            meson_source="storage_cancreate()"
-        )
-
-
-@app.delete("/api/v1.0/destroy")
-@elemento_iam.validate_request
-async def storage_destruction(req: Request):
-    billing_uuid = None
-    try:
-        to_destroy = await req.json()
-        service_country = req.headers["service_country"] if "service_country" in req.headers.keys() else os.getenv("PROVIDER_REGION")
+            
         try:
-            volume_uuid = get_from_dict(to_destroy, "volume_uuid")
-        except Exception as error:
-            return ElementoBadRequest(
-                origin="MESON",
-                error="Bad Request",
-                field_errors=[
-                    BadRequestFieldError(
-                        field="volume_uuid",
-                        where="BODY",
-                        error="MISSING",
-                        type="UUID",
-                        expected_value=""
-                    )
-                ],
-                docs_url="",
-                trace=traceback.format_exc(),
-                meson_source="storage_destruction()"
-            )
+            volume = get_storage_by_uuid(volume_id)
+        except Exception as e:
+            volume = None
+            logging.debug(f"Volume lookup notice: {str(e)}")
 
-        try:
-            storage_config = information_about_storages_by_id(volume_uuid, service_country)
-        except Exception as error:
+        if not volume:
             return ElementoNotFound(
-                origin="MESON",
-                error="Error during storage retrieve information",
-                trace=traceback.format_exc(),
-                meson_source="storage_destruction()"
+                origin="MESON", 
+                error="Volume not found on GCP infrastructure. Cannot proceed."
             )
 
-        try:
-            response = destroy_storage(volume_uuid, service_country)
-        except Exception as error:
-            return ElementoInternalServerError(
-                origin="MESON",
-                error=f"Error during storage destruction - {error.__str__()}",
-                trace=traceback.format_exc(),
-                meson_source="storage_destruction"
+        billing_uuid = volume.billing_uuid
+        
+        if not billing_uuid:
+            return ElementoNotFound(
+                origin="MESON", 
+                error="Billing UUID not found for this volume"
             )
 
-        try:
-            # -- STOP BILLING --
-            billing_manager.stop(storage_config.billing_uuid, client_uuid)
-            # ------------------
-        except Exception as error:
-            return ElementoBillingFailed(
-                origin="MESON",
-                error="Error during billing suspension",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                meson_source="storage_destruction()"
-            )
+        if role == 'portal' and to_destroy.get("client_uuid"):
+            try:
+                isDeleted = delete_storage(volume_id)
+                
+                if isDeleted:
+                    billing_manager.update_status(billing_uuid, BillingStatus.DELETED)
+                    return JSONResponse(content={"destroyed": True, "vid": volume_id}, status_code=200)
+                else:
+                    billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+                    return ElementoNotFound(
+                        origin="MESON",
+                        error="Volume not found or could not be deleted synchronously on GCP",
+                        trace=traceback.format_exc(),
+                    )
+            except Exception as ex:
+                billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+                logging.error(str(ex))
+                return ElementoInternalServerError(
+                    origin="MESON",
+                    error=f"Internal Server Error during synchronous portal deletion - {ex}",
+                    trace=f"{traceback.format_exc()}",
+                )
 
-        return JSONResponse(
-            content={"unregistered": response, "uniqueID": volume_uuid}, status_code=200
-        )
-
-    except Exception as error:
-        logging.error(error.__str__())
+        else:
+            try:
+                to_destroy['client_uuid'] = to_destroy.get('client_uid', client_uuid)
+                res = billing_manager.update_status(
+                    billing_uuid, 
+                    BillingStatus.TO_DELETE, 
+                    service_type="storage", 
+                    service_sub_type="blockstorage",
+                    payload=to_destroy
+                )
+                if res is not None:
+                    return JSONResponse(status_code=202, content={"status": "to_delete", "billing_uuid": billing_uuid})
+            except Exception as ex:
+                return ElementoBadRequest(
+                    origin="MESON",
+                    error=f"Volume tracking error for standard user - {ex}",
+                    field_errors=[],
+                    docs_url="",
+                    trace=f"{traceback.format_exc()}",
+                    meson_source="route_delete_storage()",
+                )
+    except Exception as e:
         return ElementoInternalServerError(
             origin="MESON",
-            error=f"Internal Server Error - {error.__str__()}",
-            trace=traceback.format_exc(),
-            meson_source="storage_destruction()"
+            error=f"Fatal Error - {e}",
+            trace=f"{traceback.format_exc()}",
         )

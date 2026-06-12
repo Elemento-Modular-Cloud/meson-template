@@ -7,3 +7,6 @@
 [submodule "elogger"]
 	path = elogger
 	url = git@github.com:Elemento-Modular-Cloud/elogger.git
+[submodule "elemento_marketplace"]
+	path = elemento_marketplace
+	url = https://github.com/Elemento-Modular-Cloud/elemento-marketplace.git

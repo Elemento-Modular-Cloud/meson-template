@@ -1,23 +1,14 @@
+import json
 import os
-from models.StorageModel import ElementoStorage
+from models.StorageModel import Storage
 
-class ElementoCpu:
-    """
-    Describes the cpu configuration of the machine.
 
-    Attributes:
-        slots (int): The number of cores that the cpu has.
-        fullPhysical (bool): If the cpu is full physical.
-        maxOverprovision (int): The maximum number of vm per core.
-        min_frequency (float): The minimum frequency of the cpu.
-        arch (list[str]): The architectures for the cpu.
-        flags (list[str]): The instruction sets that the cpu will use.
-    """
+class CpuModel:
 
     def __init__(
         self,
         slots: int = 1,
-        fullPhysical: bool = False,
+        fullPhysical: bool = True,
         maxOverprovision: int = 1,
         min_frequency: float = 1.0,
         arch: list[str] = None,
@@ -30,25 +21,29 @@ class ElementoCpu:
         self.arch = arch
         self.flags = flags
 
+    @staticmethod
+    def from_json(json: dict):
+        return CpuModel(
+            slots=json["slots"] if json["fullPhysical"] is True else json["slots"] / 2,
+            fullPhysical=json["fullPhysical"],
+            maxOverprovision=json["maxOverprovision"],
+            min_frequency=json["min_frequency"],
+            arch=json["arch"],
+            flags=json["flags"],
+        )
+
     def to_json(self):
         return {
             "slots": self.slots,
             "fullPhysical": self.fullPhysical,
             "maxOverprovision": self.maxOverprovision,
             "min_frequency": self.min_frequency,
-            "arch": [arch for arch in self.arch],
-            "flags": [flag for flag in self.flags],
+            "arch": [arch for arch in self.arch] if self.arch else [],
+            "flags": [flag for flag in self.flags] if self.flags else [],
         }
 
 
-class ElementoMemory:
-    """
-    Describes the memory configuration of the machine.
-
-    Attributes:
-        capacity (int): The capacity of the memory in MB.
-        requireECC (bool): If the memory requires the error correcting code.
-    """
+class MemoryModel:
 
     def __init__(
         self,
@@ -58,21 +53,21 @@ class ElementoMemory:
         self.capacity = int(capacity)
         self.requireECC = requireECC
 
+    @staticmethod
+    def from_json(json: dict):
+        return MemoryModel(
+            capacity=int(json["capacity"]),
+            requireECC=json["requireECC"],
+        )
+
     def to_json(self):
-        return {"capacity": self.capacity, "requireECC": self.requireECC}
+        return {
+            "capacity": self.capacity,
+            "requireECC": self.requireECC
+        }
 
 
-class ElementoPciDev:
-    """
-    Describes the PCI devices configuration of the machine.
-
-    All the PCI devices
-    supported by Elemento are visible at [https://github.com/Elemento-Modular-Cloud/elemento-pciid-mapper]
-    Attributes:
-        vendor (str): The vendor of the PCI device.
-        model (str): The model of the PCI device.
-        quantity (int): The quantity of the PCI device.
-    """
+class PciDevModel:
 
     def __init__(
         self,
@@ -84,21 +79,20 @@ class ElementoPciDev:
         self.model = model
         self.quantity = int(quantity)
 
+    @staticmethod
+    def from_json(key: str, value: int):
+        vendor, model = key.split(":")
+        return PciDevModel(
+            vendor=vendor,
+            model=model,
+            quantity=int(value),
+        )
+
     def to_json(self):
         return {f"{self.vendor}:{self.model}": self.quantity}
 
 
-class ElementoMisc:
-    """
-    Describes the OS configuration of the machine.
-
-    All the Images
-    supported by Elemento are visible at [https://github.com/Elemento-Modular-Cloud/iso-templates/blob/main/iso.json]
-    Attributes:
-        os_family (str): The OS family of the machine.
-        It can be Windows or Linux.
-        os_flavour (str): The OS flavour of the machine.
-    """
+class MiscModel:
 
     def __init__(
         self,
@@ -108,20 +102,21 @@ class ElementoMisc:
         self.os_family = os_family
         self.os_flavour = os_flavour
 
+    @staticmethod
+    def from_json(json: dict):
+        return MiscModel(
+            os_family=json["os_family"],
+            os_flavour=json["os_flavour"],
+        )
+
     def to_json(self):
-        return {"os_family": self.os_family, "os_flavour": self.os_flavour}
+        return {
+            "os_family": self.os_family,
+            "os_flavour": self.os_flavour
+        }
 
 
-class ElementoNetworkConfig:
-    """
-    Describes the network configuration of the machine.
-
-    Every machine has his own public IP.
-
-    Attributes:
-        ipv4 (str): The public IP of the machine.
-        mac (str): The MAC address of the machine.
-    """
+class NetworkConfigModel:
 
     def __init__(
         self,
@@ -137,18 +132,7 @@ class ElementoNetworkConfig:
         return {"ipv4": self.ipv4, "ipv6": self.ipv6, "mac": self.mac}
 
 
-class ElementoAuth:
-    """
-    Describes the authentication configuration required for the machine.
-
-    For some operating systems, the ssh key can't be used (e.g. Windows), so it's important to check
-    and use all the authentication ways properly.
-
-    Attributes:
-        ssh_key (str): The ssh key that will be used to access the machine.
-        username (str): The username that will be used to access the machine.
-        password (str): The password that will be used to access the machine.
-    """
+class AuthModel:
 
     def __init__(
         self,
@@ -157,68 +141,55 @@ class ElementoAuth:
         password: str = None,
     ):
         self.ssh_key = ssh_key
-        self.username = username
-        self.password = password
+        self.username = "elemento"
+        self.password = "Test.elemento1"
+        if username:
+            self.username = username.lower()
+        if password:
+            self.password = password
+
+    @staticmethod
+    def from_json(json: dict):
+        return AuthModel(
+            ssh_key=json["ssh-key"],
+            username=json["username"],
+            password=json["password"],
+        )
 
     def to_json(self):
         return {
-            "ssh_key": self.ssh_key,
+            "ssh-key": self.ssh_key,
             "username": self.username,
             "password": self.password,
         }
 
 
-class ElementoMachine:
-    """
-    Describes a machine configuration to be created.
-
-    Use this class and its underlying classes to create and manage a machine on the csp.
-    Some ids (client_uuid, vm_uuid, billing_uuid) MUST be setted inside the machine on the csp to retrieve them.
-    These ids are fundamental for the Meson to work properly.
-
-    Attributes:
-        csp_region (str): The region where the machine will be created. --> maybe will be removed
-        client_uuid (str): The client's unique identifier from Elemento.
-        vm_name (str): The name of the machine that will be displayed in the response.
-        volumes (list[ElementoStorage]): The volume models that will be attached to the machine.
-        if the id is given, the volume already exists otherwise it has to be created from the given configuration.
-        billing_uuid (str): The billing id that will be used to charge the client.
-        vm_uuid (str): The unique identifier of the machine.
-        cpu (ElementoCpu): The cpu configuration of the machine.
-        mem (ElementoMemory): The memory configuration of the machine.
-        pci (list[ElementoPciDev]): The pci devices configuration of the machine.
-        misc (ElementoMisc): The OS configuration of the machine.
-        network_config (ElementoNetworkConfig): The network configuration of the machine.
-        auth (ElementoAuth): The authentication configuration required for the machine.
-        creation_date (str): The creation date of the machine.
-        It MUST be updated when the machine is created (%m/%d/%Y, %H:%M:%S).
-        notes (dict): A dictionary with a totally free space to add info about the machine.
-        It can be used to store any kind of information useful for the Meson implementation.
-        All the information won't be displayed in the Elemento's response.
-    """
+class VmModel:
 
     def __init__(
         self,
-        csp_region: str = None,
         client_uuid: str = None,
         vm_name: str = None,
-        volumes: list[ElementoStorage] = None,
+        volumes: list[Storage] = None,
         billing_uuid: str = None,
         vm_uuid: str = None,
-        cpu: ElementoCpu = None,
-        mem: ElementoMemory = None,
-        pci: list[ElementoPciDev] = None,
-        misc: ElementoMisc = None,
-        network_config: ElementoNetworkConfig = None,
-        private_network_config: ElementoNetworkConfig = None,
-        auth: ElementoAuth = None,
+        cpu: CpuModel = CpuModel(),
+        mem: MemoryModel = MemoryModel(),
+        pci: list[PciDevModel] = list(),
+        misc: MiscModel = MiscModel(),
+        network_config: NetworkConfigModel = NetworkConfigModel(),
+        private_network_config: NetworkConfigModel = NetworkConfigModel(),
+        auth: AuthModel = AuthModel(),
         creation_date: str = None,
-        notes: dict = dict(),
+        price: dict = {},
+        notes: dict = {},
+        cloudinit: dict = None,
+        region: str = os.environ.get("PROVIDER_REGION", "us-east1"),
+        vm_tags: list[str] = None,
     ):
-        self.csp_region = csp_region
         self.client_uuid = client_uuid
         self.vm_name = vm_name
-        self.volumes = volumes
+        self.volumes = volumes if volumes is not None else []
         self.billing_uuid = billing_uuid
         self.vm_uuid = vm_uuid
         self.cpu = cpu
@@ -229,61 +200,168 @@ class ElementoMachine:
         self.private_network_config = private_network_config
         self.auth = auth
         self.creation_date = creation_date
+        self.price = price
         self.notes = notes
+        self.cloudinit = cloudinit
+        self.region = region
+        self.vm_tags = vm_tags
+
+    @staticmethod
+    def from_json(json_request: dict, client_uuid: str):
+        json_request["req"] = json.loads(json_request["req"]) if type(json_request["req"]) is str else json_request["req"]
+        volumes = []
+
+        for volume in json_request["volumes"]:
+            volumes.append(Storage.from_json(volume))
+
+        cpu = CpuModel.from_json(json_request["req"]["cpu"])
+        mem = MemoryModel.from_json(json_request["req"]["mem"])
+
+        pcidevs = []
+        if "devices" in json_request["req"]["pci"]:
+            for key, value in json_request["req"]["pci"]["devices"].items():
+                pcidevs.append(PciDevModel.from_json(key, value))
+
+        misc = MiscModel.from_json(json_request["req"]["misc"])
+        auth = AuthModel()
+        if "authentication" in json_request.keys():
+            auth = AuthModel.from_json(json_request["authentication"])
+        elif "authentication" in json_request["req"].keys():
+            auth = AuthModel.from_json(json_request["req"]["authentication"])
+
+        return VmModel(
+            client_uuid=client_uuid,
+            vm_name=json_request["vm_name"],
+            volumes=volumes,
+            cpu=cpu,
+            mem=mem,
+            pci=pcidevs,
+            misc=misc,
+            auth=auth,
+            cloudinit=json_request.get("cloudinit", None),
+            region=json_request["region"],
+        )
+
+    @staticmethod
+    def from_json_canallocate(request: dict):
+        cpu = CpuModel.from_json(request["req"]["cpu"])
+        mem = MemoryModel.from_json(request["req"]["mem"])
+
+        pcidevs = []
+        if "devices" in request["req"]["pci"]:
+            for key, value in request["req"]["pci"]["devices"].items():
+                pcidevs.append(PciDevModel.from_json(key, value))
+
+        misc = MiscModel.from_json(request["req"]["misc"])
+        auth = AuthModel()
+        if "authentication" in request.keys():
+            auth = AuthModel.from_json(request["authentication"])
+        elif "authentication" in request["req"].keys():
+            auth = AuthModel.from_json(request["req"]["authentication"])
+            
+        region = request.get("region")
+        return VmModel(
+            cpu=cpu,
+            mem=mem,
+            pci=pcidevs,
+            misc=misc,
+            auth=auth,
+            region=region,
+            cloudinit=request.get("cloudinit", None),
+        )
+
+    @staticmethod
+    def from_gcp_json(gcp_data: dict):
+        labels = gcp_data.get("labels", {})
+        machine_details = gcp_data.get("_machine_type_details", {}) or {}
+
+        cpu = CpuModel(
+            slots=machine_details.get("guestCpus", 1),
+            fullPhysical=not machine_details.get("isSharedCpu", False),
+            arch=[gcp_data.get("cpuPlatform", "X86_64")],
+        )
+
+        mem = MemoryModel(capacity=machine_details.get("memoryMb", 1024))
+
+        nics = gcp_data.get("networkInterfaces", [])
+        nic = nics[0] if nics else {}
+        pub_ipv4 = None
+        if "accessConfigs" in nic and nic["accessConfigs"]:
+            pub_ipv4 = nic["accessConfigs"][0].get("natIP")
+
+        net_cfg = NetworkConfigModel(ipv4=pub_ipv4, mac=nic.get("macAddress"))
+        priv_net_cfg = NetworkConfigModel(ipv4=nic.get("networkIP"), mac=nic.get("macAddress"))
+
+        misc = MiscModel(os_family=labels.get("os_family"), os_flavour=labels.get("os_flavour"))
+
+        volumes = []
+        for disk in gcp_data.get("disks", []):
+            details = disk.get("_source_disk_details", {}) or {}
+            disk_labels = details.get("labels", {}) or {}
+
+            mock_volume_payload = {
+                "volumeID": disk_labels.get("billing-uuid") or details.get("id"),
+                "creatorID": disk_labels.get("creator-id") or labels.get("client_uuid"),
+                "name": details.get("name") or disk.get("deviceName", "unknown-disk"),
+                "private": disk_labels.get("private", "false").lower() == "true",
+                "readonly": disk_labels.get("readonly", "false").lower() == "true",
+                "shareable": disk_labels.get("shareable", "false").lower() == "true",
+                "bootable": disk.get("boot", False) or disk_labels.get("bootable", "false").lower() == "true",
+                "clonable": disk_labels.get("clonable", "false").lower() == "true",
+                "size": int(details.get("sizeGb", 0)) if details.get("sizeGb") else int(disk.get("diskSizeGb", 0)),
+                "priority": int(disk_labels.get("priority", 50)) if disk_labels.get("priority") else 50,
+                "volume_tags": disk_labels.get("tags", []),
+                "type": disk_labels.get("type"),
+                "region": gcp_data.get("zone", "").split("/")[-1]
+            }
+
+            volumes.append(Storage.from_json(mock_volume_payload))
+
+        return VmModel(
+            region=gcp_data.get("zone", "").split("/")[-1],
+            client_uuid=labels.get("client_uuid"),
+            vm_name=gcp_data.get("name"),
+            vm_uuid=gcp_data.get("id"),
+            volumes=volumes,
+            billing_uuid=labels.get("billing_uuid"),
+            cpu=cpu,
+            mem=mem,
+            misc=misc,
+            network_config=net_cfg,
+            private_network_config=priv_net_cfg,
+            creation_date=gcp_data.get("creationTimestamp"),
+        )
 
     def to_json(self):
-        """
-        create a dict from an ElementoMachine object with all fields
-
-        Returns:
-            A json version of the ElementoMachine.
-        """
         pci_dict = {}
         for pci in self.pci:
             pci_dict.update(pci.to_json())
         return {
-            "csp_region": self.csp_region,
-            "client_uuid": self.client_uuid,
+            "region": self.region,
+            "client_uid": self.client_uuid,
             "vm_name": self.vm_name,
-            "volumes": (
-                [volume.to_json() for volume in self.volumes]
-                if self.volumes is not None
-                else list()
-            ),
+            "volumes": [volume.to_json() for volume in self.volumes] if self.volumes else [],
             "billing_uuid": self.billing_uuid,
-            "vm_uuid": self.vm_uuid,
+            "vm_uid": self.vm_uuid,
             "cpu": self.cpu.to_json() if self.cpu is not None else None,
             "mem": self.mem.to_json() if self.mem is not None else None,
-            "pci": {
-                "devices": pci_dict if self.pci is not None else dict()
-            },
+            "pci": {"devices": pci_dict},
             "misc": self.misc.to_json() if self.misc is not None else None,
-            "network_config": (
-                self.network_config.to_json()
-                if self.network_config is not None
-                else None
-            ),
-            "private_network_config": (
-                self.private_network_config.to_json()
-                if self.private_network_config is not None
-                else None
-            ),
+            "network_config": self.network_config.to_json() if self.network_config is not None else None,
+            "private_network_config": self.private_network_config.to_json() if self.private_network_config is not None else None,
             "authentication": self.auth.to_json() if self.auth is not None else None,
             "creation_date": self.creation_date,
             "notes": self.notes,
+            "xml": "",
+            "vm_tags": self.vm_tags,
         }
 
     def to_json_register(self):
-        """
-        create a dict from an ElementoMachine object for the register response
-
-        Returns:
-            A dict for the register response.
-        """
         pci_dict = {}
         for pci in self.pci:
             pci_dict.update(pci.to_json())
         return {
+            "registered": True,
             "uniqueID": self.vm_uuid,
             "req_json": {
                 "slots": self.cpu.slots,
@@ -291,16 +369,10 @@ class ElementoMachine:
                 "allowSMT": self.cpu.fullPhysical,
                 "arch": self.cpu.arch,
                 "flags": self.cpu.flags,
-                "ramsize": self.mem.capacity,
+                "ramsize": self.mem.capacity / 1024,
                 "reqECC": self.mem.requireECC,
-                "volumes": (
-                    [volume.to_json() for volume in self.volumes]
-                    if self.volumes is not None
-                    else list()
-                ),
-                "pcidevs": {
-                    "devices": pci_dict if self.pci is not None else dict()
-                },
+                "volumes": [volume.to_json_response() for volume in self.volumes] if self.volumes else [],
+                "pcidevs": {"devices": pci_dict},
                 "netdevs": [],
                 "os_family": self.misc.os_family,
                 "os_flavour": self.misc.os_flavour,
@@ -310,53 +382,21 @@ class ElementoMachine:
                     "ipv4": self.network_config.ipv4,
                     "mac": self.network_config.mac,
                 },
+                "autostart": False,
+                "firmware": "",
+                "networks": [],
+                "qemu_agent": "",
             },
-            "xml": "",
+            "xml": ""
         }
 
-    def to_json_status(self) -> dict:
-        """A toJson method for the statusjson API response.
-
-        Returns:
-            The dict for the statusjson api response
-        """
+    def to_json_running(self) -> dict:
         pci_dict = {}
         for pci in self.pci:
             pci_dict.update(pci.to_json())
-        return {
-            "cpu": {
-                "SMTOn": True,
-                "SMTRatio": 0,
-                "arch": self.cpu.arch,
-                "flags": self.cpu.flags,
-                "frequency": self.cpu.min_frequency,
-                "max_cores": self.cpu.slots,
-                "max_threads": self.cpu.maxOverprovision,
-                "ncores": self.cpu.slots,
-                "used_cores": 0,
-                "used_threads": 0,
-                "vendorID": "",
-            },
-            "manufacturer": "",
-            "mem": {
-                "avail": self.mem.capacity,
-                "isECC": self.mem.requireECC,
-                "size": self.mem.capacity,
-            },
-            "pci": {
-                "devices": pci_dict if self.pci is not None else dict()
-            },
-        }
 
-    def to_json_running(self, price: dict) -> dict:
-        """A toJson method for the running API response.
+        env_suffix = "dev." if os.environ.get("ENV") == "development" else ""
 
-        Returns:
-            The dict for the running api response
-        """
-        pci_dict = {}
-        for pci in self.pci:
-            pci_dict.update(pci.to_json())
         return {
             "uniqueID": self.vm_uuid,
             "req_json": {
@@ -365,26 +405,28 @@ class ElementoMachine:
                 "allowSMT": self.cpu.fullPhysical,
                 "arch": self.cpu.arch,
                 "flags": self.cpu.flags,
-                "ramsize": self.mem.capacity,
+                "ramsize": self.mem.capacity / 1024,
                 "reqECC": self.mem.requireECC,
-                "volumes": (
-                    [volume.to_json() for volume in self.volumes]
-                    if self.volumes is not None
-                    else list()
-                ),
-                "pcidevs": {
-                    "devices": pci_dict if self.pci is not None else dict()
-                },
+                "volumes": [volume.to_json_response() for volume in self.volumes] if self.volumes else [],
+                "pcidevs": [],
                 "netdevs": [],
                 "os_family": self.misc.os_family,
                 "os_flavour": self.misc.os_flavour,
                 "vm_name": self.vm_name,
                 "creation_date": self.creation_date,
                 "network_config": {
+                    "dom_display": {"port": 5900, "protocol": "vnc"},
+                    "interface": "vnet102",
+                    "is_reachable_from_host": False,
+                    "model": "virtio",
+                    "name": "",
+                    "source": "default",
+                    "type": "network",
                     "ipv4": self.network_config.ipv4,
                     "ipv6": self.network_config.ipv6,
                     "mac": self.network_config.mac,
                 },
+                "networks": [],
                 "private_network_config": [
                     {
                         "ipv4": self.private_network_config.ipv4,
@@ -393,49 +435,15 @@ class ElementoMachine:
                     },
                 ],
             },
-            "mesos": {"provider": os.getenv("PROVIDER"), "price": price},
-            "xml": "<domain></domain>",
+            "xml": "",
+            "target_type": "meson",
+            "serverurl": f"https://{os.environ.get('PROVIDER', 'gcp')}.{env_suffix}meson.elemento.cloud:7777",
+            "states": "running",
+            "vm_tags": self.vm_tags,
+            "billing_uuid": self.billing_uuid,
+            "region": self.region,
+            "service_uuid": self.vm_uuid
         }
-
-    def to_json_canallocate(self, price: dict) -> dict:
-        """A toJson method for the canallocate API response.
-
-        Args:
-            price (dict): Pricing dict details
-
-        Returns:
-            The dict for the canallocate api response
-        """
-        return {"canallocate": True, "price": price}
-
-
-class ElementoMetrics:
-    """
-    Describes the metrics of the machine.
-
-    Attributes:
-        itemID (str): The unique identifier of the machine.
-        status (str): The status of the machine.
-        creationDate (str): The creation date of the machine.
-        lastUpdateDate (str): The last update date of the machine.
-    """
-
-    def __init__(
-        self,
-        itemID: str = None,
-        status: str = None,
-        creationDate: str = None,
-        lastUpdateDate: str = None,
-    ):
-        self.itemID = itemID
-        self.status = status
-        self.creationDate = creationDate
-        self.lastUpdateDate = lastUpdateDate
-
-    def to_json(self):
-        return {
-            "itemID": self.itemID,
-            "status": self.status,
-            "creationDate": self.creationDate,
-            "lastUpdateDate": self.lastUpdateDate,
-        }
+        
+    def to_elemento_dict(self):
+        return self.to_json_running()

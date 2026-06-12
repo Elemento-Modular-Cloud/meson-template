@@ -1,1 +1,1 @@
-# Contains all the logic to authnticate the meson into the provider
+# Contains all the logic to authenticate the meson into the cloud provider

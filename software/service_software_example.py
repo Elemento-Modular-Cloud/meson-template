@@ -1,20 +1,15 @@
-from models.SoftwareExampleModel import (
-    SaaSExampleService,
-    ElementoSaaSExample,
-    SaaSExampleCapabilities,
-    SaaSExampleMetadata,
-    SaaSExampleResources,
-)
+# NOTE: All the software services file names must start with "service_" in order to be dynamically imported by the main service file.
+
+from models.PlatformExampleModel import ExampleModel, ExampleCapabilities
 
 # This file contains the functions that will be used to execute specific services on this specific provider.
 
-def get_service(service_uuid: str, client_uuid: str, service_credentials: str = None, service_country: str = None) -> tuple:
+def get_service(service_uuid: str, client_uuid: str) -> tuple:
     """
     Retrieve a specific service form the provider.
     Args:
         service_uuid (str): The service UUID to retrieve
         client_uuid (str): The client UUID
-        service_country (str): optional, region to use
     Returns:
         tuple: (The service configuration if found, status_code)
     Raises:
@@ -22,7 +17,7 @@ def get_service(service_uuid: str, client_uuid: str, service_credentials: str = 
     """
     try:
         service_config = {}
-        # Add code in order to return the service based on service id
+        # Add code in order to return the service based on client_uuid and service_uuid
 
         return service_config, 200
 
@@ -30,12 +25,11 @@ def get_service(service_uuid: str, client_uuid: str, service_credentials: str = 
         return {"error": f"Error in retrieve service configs - {e}"}, 500
 
 
-def get_all_services(client_uuid: str, service_credentials: str = None, service_country: str = None) -> tuple:
+def get_all_services(client_uuid: str) -> tuple:
     """
     Retrieve all the services from the provider.
     Args:
         client_uuid (str): client to retrieve provided services.
-        service_country (str): optional, region to use
     Returns:
         tuple: (The response data with the services, status_code)
     """
@@ -49,67 +43,54 @@ def get_all_services(client_uuid: str, service_credentials: str = None, service_
         return {"error": f"Error in retrieve global configs - {e}"}, 500
 
 
-def is_config_available(service_config: SaaSExampleService, service_country: str) -> bool:
-    """
-    Checks if the provided service_config is compatible with the provider offering.
-    """
-    return True
-
-
-def setup_config(req_data: dict, client_uuid: str, billing_uuid: str, service_credentials: str = None, service_country: str = None) -> ElementoSaaSExample:
+def setup_config(req_data: dict, client_uuid: str) -> ExampleModel:
     """
     Create a new service instance from JSON request.
     Args:
         req_data (dict): requested provider config
         client_uuid (str): client_uuid to be assigned
-        billing_uuid (str): billing identifier
-        service_country (str): region to use
     Returns:
         ExampleModel: new instance of service
     """
     try:
-        # Preliminary operations
-        req_metadata = SaaSExampleMetadata()
-        req_resources = SaaSExampleResources()
-        capabilities = SaaSExampleCapabilities()
+        # Add code in order to create a new instance of the service configuration model based on the request data. The client_uuid must be assigned to the new service instance.
+        req_metadata = {}
+        req_resources = {}
+        capabilities = ExampleCapabilities()
 
-        return ElementoSaaSExample(req_metadata, req_resources, client_uuid, billing_uuid, capabilities)
+        return ExampleModel(req_metadata, req_resources, client_uuid, capabilities)
 
     except KeyError as e:
         raise Exception(e)
 
 
-def create(service_config: ElementoSaaSExample, service_credentials: str = None, service_country: str = None) -> tuple:
+def create(service_config: ExampleModel) -> tuple:
     """
     Create a new service.
     Args:
         service_config (ExampleModel): The service configuration data model.
-        service_country (str): optional, region to use.
     Returns:
-        tuple: (The response data with the cluster ID, status_code)
+        tuple: (The response data with the created service, status_code)
     """
     try:
-        if not is_config_available(service_config, service_country):
-            raise Exception("Service configuration is not available")
+        
+        ##! NOTE: the billing_uuid and client_uuid must be inserted inside a field of the service (ex: labels, tags, names, etc) 
+        ##! in order to be able to retrieve it in the future when the service is deleted.
 
-        ##! NOTE: the billing id must be attach as a entry of the dict
-        # It is already in the service config as field
         # Insert here the POST to create service
-        new_service_id = None  
 
-        return new_service_id, 200
+        return service_config, 200
 
     except KeyError as e:
         return {"error": f"Error in service creation - {e}"}, 500
 
 
-def delete(service_id: str, client_uuid: str, service_credentials: str = None, service_country: str = None) -> tuple:
+def delete(service_id: str, client_uuid: str) -> tuple:
     """
     Delete a service in the provider.
     Args:
         service_id (str): The service id to delete.
         client_uuid (str): Client indetifier.
-        service_country (str): optional, region to use.
     Returns:
         tuple: (billing_uuid, status_code)
     """
@@ -120,6 +101,41 @@ def delete(service_id: str, client_uuid: str, service_credentials: str = None, s
     
     except Exception as e:
         return {"error": f"Error in service deletion - {e}"}, 500
+    
+
+def cancreate(service_config: ExampleModel) -> bool:
+    """
+    Checks if the provided service_config can be created with the provider offering.
+    Args:
+        service_config (ExampleModel): The service configuration data model.
+    Returns:
+        bool: True if the service can be created, False otherwise.
+    """
+    try:
+        return True
+    
+    except Exception as e:
+        print(f"Error occurred while checking if service can be created: {e}")
+        return False
+
+
+def get_credentials(service_id: str, client_uuid: str) -> tuple:
+    """
+    Retrieve the credentials of a service.
+    Args:
+        service_id (str): The service id to retrieve credentials.
+        client_uuid (str): Client indetifier.
+    Returns:
+        tuple: (The response data with the credentials, status_code)
+    """
+    try:
+        credentials = {}
+        # Insert here the code to retrieve the credentials of the service
+
+        return credentials, 200
+    
+    except Exception as e:
+        return {"error": f"Error in retrieve credentials - {e}"}, 500
 
 
 # ------------------------ UTILS FUNCTIONS ------------------------

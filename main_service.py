@@ -6,7 +6,7 @@ import uuid
 import os
 
 from __init__ import __version__
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from commons.utils import (
     get_from_dict,
@@ -24,7 +24,7 @@ from errors.server_errors import (
     ElementoServiceUnavailable,
 )
 from commons.elemento_iam import ElementoIdentityAccessManagement
-from elemento_billing_manager.billing_manager import billing_manager
+from elemento_billing_manager.billing_manager import billing_manager, BillingStatus
 from dotenv import load_dotenv
 from typing import Any
 from elogger.logger_manager_fastapi import setup_logging
@@ -81,8 +81,21 @@ class HealthCheckFilter(logging.Filter):
 uvicorn_logger = logging.getLogger("uvicorn.access")
 uvicorn_logger.addFilter(HealthCheckFilter())
 
+def get_service_or_import(service_name):
+    if service_name in services and services[service_name] is not None:
+        return services[service_name]
 
-# This is an example implementation for the routing of services supported on this specific provider.
+    try:
+        services[service_name] = try_dynamic_import_fun(
+            folder_path=root_path,
+            prefix=prefix,
+            service_name=service_name,
+            methods=methods,
+        )
+        return services[service_name]
+    except Exception as e:
+        raise e
+
 
 @app.get("/")
 async def health():
@@ -94,105 +107,118 @@ async def health():
 
 @app.get("/api/v1.0/health")
 def health():
+    # TODO: perform a GET request and check the response to ensure the provider is healthy
     return JSONResponse(
         status_code=200,
-        content={"status": "UP", "version": __version__},
+        content={"status": "UP", "version": __version__,  "provider_status": "TODO"},
     )
 
 
 @app.get("/api/v1.0/{service}/running")
 @elemento_iam.validate_request
-async def service_description(request: Request, service: str):
+async def service_description(request: Request, service: str, token: Any = None):
     try:
-        client_uuid = request.headers.get("client_uuid")
+
+        client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
+        
+        client_uuid = str(uuid.UUID(client_uuid))
 
         try:
-            service_country = (
-                request.headers["service_country"]
-                if "service_country" in request.headers.keys()
-                else os.getenv("PROVIDER_REGION")
-            )
-        except Exception as error:
-            return ElementoBadRequest(
+            current_service = get_service_or_import(service)
+        except Exception:
+            return ElementoServiceUnavailable(
                 origin="MESON",
-                error="Bad Request in 1 field",
-                field_errors=[
-                    BadRequestFieldError(
-                        field="service_country",
-                        where="HEADER",
-                        error="MISSING",
-                        type="str",
-                        expected_value="",
-                    )
-                ],
-                docs_url="",
+                error="Service unavailable",
                 trace=traceback.format_exc(),
                 meson_source="service_description()",
+                service_failed=[service],
             )
 
-        if services.get(service) is not None:
-            response, status_code = services[service]["get_all_services"](
-                client_uuid, service_country
-            )
-        else:
-            try:
-                services[service] = try_dynamic_import_fun(
-                    folder_path=root_path,
-                    prefix=prefix,
-                    service_name=service,
-                    methods=methods,
-                )
-                response, status_code = services[service]["get_all_services"](
-                    client_uuid, service_country
-                )
-            except Exception as error:
-                return ElementoServiceUnavailable(
-                    origin="MESON",
-                    error="Service unavailable",
-                    trace=traceback.format_exc(),
-                    meson_source="service_description()",
-                    service_failed=[service],
-                )
+        response, status_code = current_service["get_all_services"](client_uuid)
 
-        if status_code==200:
+        if status_code == 200:
             return JSONResponse(status_code=200, content=response)
         else:
             return ElementoInternalServerError(
                 origin="PROVIDER",
-                error = f"Internal Server Error: {response}",
+                error=f"Internal Server Error: {response}",
                 trace=traceback.format_exc(),
                 meson_source="service_description()",
             )
 
     except Exception as error:
-        logging.error(error.__str__())
+        logging.error(str(error))
         return ElementoInternalServerError(
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
             meson_source="service_description()",
         )
-    
 
-@app.get("/api/v1.0/{service}/running/{service_uid}")
+
+@app.get("/api/v1.0/{service}/running/{service_uuid}")
 @elemento_iam.validate_request
-async def service_description_by_id(request: Request, service: str, service_uid: str):
+async def service_description_by_id(request: Request, service: str, service_uuid: str, token: Any = None):
     try:
-        client_uuid = request.headers.get("client_uuid")
-    
+        client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
+        client_uuid = str(uuid.UUID(client_uuid))
         try:
-            service_country = (
-                request.headers["service_country"]
-                if "service_country" in request.headers.keys()
-                else os.getenv("PROVIDER_REGION")
+            current_service = get_service_or_import(service)
+        except Exception:
+            return ElementoServiceUnavailable(
+                origin="MESON",
+                error="Service unavailable",
+                trace=traceback.format_exc(),
+                meson_source="service_description_by_id()",
+                service_failed=[service],
             )
-        except Exception as error:
+
+        try:
+            response, status_code = current_service["get_service"](service_uuid, client_uuid)
+        except Exception as e:
+            return JSONResponse(content="Not found", status_code=404)
+
+        if status_code == 200 or status_code == 206:
+            return JSONResponse(content=response, status_code=status_code)
+        else:
+            return ElementoInternalServerError(
+                origin="PROVIDER",
+                error=f"Internal Server Error: {response}",
+                trace="",
+                meson_source="get_service()",
+            )
+
+    except Exception as error:
+        logging.error(f"server_description_by_id - {str(error)}")
+        return ElementoInternalServerError(
+            origin="MESON",
+            error="Internal Server Error",
+            trace=traceback.format_exc(),
+            meson_source="servers_description_by_id()",
+            headers={"error": str(error)},
+        )
+
+
+@app.post("/api/v1.0/{service}/create")
+@elemento_iam.validate_request
+async def create_service(request: Request, service: str, background_tasks: BackgroundTasks, token: Any = None):
+    billing_uuid = str(uuid.uuid4())
+    client_uuid = None
+
+    try:
+        service_to_create = await request.json()
+        region = service_to_create.get("region")
+        client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid") or service_to_create.get("client_uuid")
+        client_uuid = str(uuid.UUID(client_uuid))
+        interval = service_to_create.get("billing_frequency")
+
+        if client_uuid is None:
             return ElementoBadRequest(
                 origin="MESON",
-                error="Bad Request in 1 field",
+                error="Bad Request",
                 field_errors=[
                     BadRequestFieldError(
-                        field="service_country",
+                        field="client_uuid",
                         where="HEADER",
                         error="MISSING",
                         type="str",
@@ -201,165 +227,155 @@ async def service_description_by_id(request: Request, service: str, service_uid:
                 ],
                 docs_url="",
                 trace=traceback.format_exc(),
-                meson_source="service_description()",
+                meson_source="create_service()",
+            )
+
+        if interval is None:
+            return ElementoBadRequest(
+                origin="MESON",
+                error="Bad Request",
+                field_errors=[
+                    BadRequestFieldError(
+                        field="interval",
+                        where="BODY",
+                        error="MISSING",
+                        type="str",
+                        expected_value="",
+                    )
+                ],
+                docs_url="",
+                trace=traceback.format_exc(),
+                meson_source="create_service()",
             )
         
         try:
-            if services.get(service) is not None:
-                response, status_code = services[service]["get_service"](
-                    service_uid, client_uuid, service_country
-                )
-            else:
-                try:
-                    services[service] = try_dynamic_import_fun(
-                        folder_path=root_path,
-                        prefix=prefix,
-                        service_name=service,
-                        methods=methods,
-                    )
-                    response, status_code = services[service]["get_service"](
-                        service_uid, client_uuid, service_country
-                    )
-                except Exception as error:
-                    return ElementoServiceUnavailable(
-                        origin="MESON",
-                        error="Service unavailable",
-                        trace=traceback.format_exc(),
-                        meson_source="service_description()",
-                        service_failed=[service],
-                    )
-        except Exception as error:
-            return ElementoNotFound(
-                origin='MESON',
-                error=f'Service with UID {service_uid} not found',
+            current_service = get_service_or_import(service)
+        except Exception:
+            return ElementoServiceUnavailable(
+                origin="MESON",
+                error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source='get_service()'
+                meson_source="create_service()",
+                service_failed=[service],
             )
-
-        if status_code==200 or status_code==206:
-            return JSONResponse(content=response, status_code=status_code)
-        else:
-            return ElementoInternalServerError(
-                origin="PROVIDER",
-                error = f"Internal Server Error: {response}",
-                trace="",
-                meson_source="get_service()",
-            )
-
-    except Exception as error:
-        logging.error("server_description_by_id -", error.__str__())
-        return ElementoInternalServerError(
-            origin="MESON",
-            error="Internal Server Error",
-            trace=traceback.format_exc(),
-            meson_source="servers_description_by_id()",
-            headers={"error": error.__str__()},
-        )
-
-
-@app.post("/api/v1.0/{service}/create")
-@elemento_iam.validate_request
-async def create_service(request: Request, service: str):
-    billing_uuid = None
-    client_uuid = None
-    try:
-        service_to_create = await request.json()
-        service_country = (
-            request.headers["service_country"]
-            if "service_country" in request.headers.keys()
-            else os.getenv("PROVIDER_REGION")
-        )
-        async_flag = "false"
-        if request.headers.get("Async") is not None:
-            async_flag = request.headers.get("Async")
-        req_data = (
-            get_from_dict(service_to_create, "req")
-            if type(service_to_create) == dict
-            else json.loads(get_from_dict(service_to_create, "req"))
-        )
-        client_uuid = get_from_dict(service_to_create, "client_uuid")
-
-        ##* Verify presence of service
-        if services.get(service) is None:
-            try:
-                services[service] = try_dynamic_import_fun(
-                    folder_path=root_path,
-                    prefix=prefix,
-                    service_name=service,
-                    methods=methods,
-                )
-            except Exception as error:
-                return ElementoServiceUnavailable(
-                    origin="MESON",
-                    error="Service unavailable",
-                    trace=traceback.format_exc(),
-                    meson_source="create_service()",
-                    service_failed=[service],
-                )
-
-        ##* SETUP CONFIG
+        
         try:
-            service_config = services[service]["setup_config"](
-                req_data, client_uuid, service_country
-            )
-        except Exception as error:
+            cancreate_res, status_code = current_service["cancreate"](service_to_create)
+            service_to_create = cancreate_res.get("payload", service_to_create)
+        except Exception as e:
             return ElementoInternalServerError(
                 origin="MESON",
-                error="Internal Server Error",
+                error=f"Error during {service} creation trigger: {str(e)}",
+                trace=traceback.format_exc(),
+                meson_source="create_service()",
+            )
+        
+        try:
+            service_config = current_service["setup_config"](service_to_create, client_uuid)
+        except Exception as e:
+            return ElementoInternalServerError(
+                origin="MESON",
+                error=f"Error during {service} setup config: {str(e)}",
                 trace=traceback.format_exc(),
                 meson_source="create_service()",
             )
 
-        ##* SERVICE CREATION
-        try:
-            # -- START BILLING --
-            # Pick or add a service model from elemento_billing_manager directory
-            # specs = YourServiceModel(
-            #     provider=os.getenv("PROVIDER", "wasabi"),
-            #     region=service_to_create.get("region", os.getenv("WASABI_DEFAULT_REGION", "eu-central-1")),
-            #     versioning_enabled=False,
-            #     max_quota_gb=400,
-            # )
-            specs = None
-            billing_uuid = billing_manager.start(client_uuid, specs, "storage", "objectstorage", None) #TODO: capire come passare i parametri corretti
-            # -------------------
+        # --------- DEV BILLING BYPASS ---------
+        # service_created, status_code = current_service["create"](service_to_create, client_uuid, billing_uuid)
+        # return JSONResponse(
+        #     status_code=status_code,
+        #     content=service_created,
+        # )
+        # -----------------------------------
 
-            service_created, status_code = services[service]["create"](
-                service_config, client_uuid, billing_uuid
-            )
-        except Exception as error:
-            # -- STOP BILLING --
-            billing_manager.stop(billing_uuid, client_uuid)
-            # ------------------
-            logging.error(f"Error during {service} creation: {error.__str__()}")
+        # Essential to understand if billing must start or not
+        billing_uuid = service_to_create.pop("billing_uuid", None)
+        parent_billing_uuid = service_to_create.pop("parent_billing_uuid", None)
+        # -- CREATE BILLING ENTRY --
+        if not billing_uuid:
+            service_to_create["client_uuid"] = client_uuid
+            try:
+                if parent_billing_uuid:
+                    billing_uuid = billing_manager.start_sub(
+                        client_uuid=client_uuid,
+                        parent_billing_uuid=parent_billing_uuid,
+                        payload=service_to_create,
+                        service_type="service",
+                        service_sub_type=service,
+                        region=region,
+                        provider=os.getenv("PROVIDER"),
+                    )
+                else:
+                    payment_link, billing_uuid = billing_manager.start(
+                        payload=service_to_create,
+                        service_type="service",
+                        service_sub_type=service,
+                        client_uuid=client_uuid,
+                        org=token.elemento_org or None,
+                        interval=interval,
+                        provider=os.getenv("PROVIDER"),
+                        region=region,
+                    )
+                return JSONResponse(content={"payment_url": payment_link, "billing_uuid": str(billing_uuid)}, status_code=202)
+            except Exception as e:
+                logging.error(f"Error: {str(e)}")
+                return JSONResponse(status_code=500, content={"error": "billing_failed", "details": str(e)})
+        if token.elemento_role.lower() == 'portal':
+            client_uuid = service_to_create.pop("client_uuid", None)
+            client_uuid = str(uuid.UUID(client_uuid))
+            billing_manager.update_status(billing_uuid, BillingStatus.PROVISIONING)
+            try:
+                service_config = current_service["setup_config"](service_to_create, client_uuid)
+                service_created, status_code = current_service["create"](service_config, client_uuid, billing_uuid)
+
+                if status_code == 202:
+                    background_tasks.add_task(
+                        current_service["complete_setup"], client_uuid, billing_uuid, service_to_create.get("name")
+                    )
+                    billing_manager.update_status(billing_uuid, BillingStatus.RUNNING)
+                    return JSONResponse(
+                        status_code=202,
+                        content=service_created,
+                    )
+                if status_code == 200:
+                    billing_manager.update_status(billing_uuid, BillingStatus.RUNNING)
+                    return JSONResponse(
+                        status_code=200,
+                        content=service_created,
+                    )
+                else:
+                    logging.error(f"Error during service creation: {traceback.format_exc()}")
+                    billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+                    return ElementoInternalServerError(
+                        origin="PROVIDER",
+                        error=f"Immediate provider error: {service_created}",
+                        trace=traceback.format_exc(),
+                        meson_source="create_service()",
+                    )
+
+            except Exception:
+                logging.error(f"Error during service creation trigger: {traceback.format_exc()}")
+                billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+                return ElementoCreationFailed(
+                    origin="MESON",
+                    error=f"Error during {service} creation trigger",
+                    trace=traceback.format_exc(),
+                    stopped_successfully=True,
+                    billing_suspended=True,
+                    meson_source="create_service()",
+                )
+
+        else:
+            logging.error("Not Authorized")
             return ElementoCreationFailed(
                 origin="MESON",
-                error=f"Error during {service} creation",
-                trace=traceback.format_exc(),
-                stopped_successfully=True,
-                billing_suspended=True,
-                meson_source="create_service()",
-            )
-
-        if status_code==200:
-            return JSONResponse(status_code=status_code, content=service_created.to_json())
-        else:
-            # -- STOP BILLING --
-            billing_manager.stop(billing_uuid, client_uuid)
-            # ------------------
-            logging.error("Service creation failed: %s", service_created)
-            return ElementoInternalServerError(
-                origin="PROVIDER",
-                error = f"Internal Server Error: {service_created}",
+                error="Not authorized",
                 trace=traceback.format_exc(),
                 meson_source="create_service()",
             )
 
     except Exception as error:
-        # -- STOP BILLING --
-        billing_manager.stop(billing_uuid, client_uuid)
-        # ------------------    
-        logging.error(error.__str__())
+        logging.error(str(error))
         return ElementoInternalServerError(
             origin="MESON",
             error="Internal Server Error",
@@ -370,107 +386,114 @@ async def create_service(request: Request, service: str):
 
 @app.delete("/api/v1.0/{service}/delete")
 @elemento_iam.validate_request
-async def delete_service(request: Request, service: str):
-    billing_uuid = None
+async def delete_service(request: Request, service: str, background_tasks: BackgroundTasks, token: Any = None):
     try:
         service_to_delete = await request.json()
-        service_country = (
-            request.headers["service_country"]
-            if "service_country" in request.headers.keys()
-            else os.getenv("PROVIDER_REGION")
-        )
-        client_uuid = get_from_dict(service_to_delete, "client_uuid")
-        service_uid = get_from_dict(service_to_delete, "id")
+        client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid") or service_to_delete.get("client_uuid")
+        client_uuid = str(uuid.UUID(client_uuid))
+        target_uuid = service_to_delete.get("service_uuid", "")
+        billing_uuid = None
 
-        ##* Verify presence of service
-        if services.get(service) is None:
+        try:
+            current_service = get_service_or_import(service)
+        except Exception:
+            return ElementoServiceUnavailable(
+                origin="MESON",
+                error="Service unavailable",
+                trace=traceback.format_exc(),
+                meson_source="delete_service()",
+                service_failed=[service],
+            )
+
+        # --------- DEV BILLING BYPASS ---------
+        # response, status_code = current_service["delete"](target_uuid, client_uuid)
+        # return JSONResponse(
+        #     status_code=status_code,
+        #     content=response,
+        # )
+        # -----------------------------------
+
+        role = token.elemento_role.lower()
+
+        if role == 'portal':
+            client_uuid = service_to_delete.get("client_uuid")
+            client_uuid = str(uuid.UUID(client_uuid))
             try:
-                services[service] = try_dynamic_import_fun(
-                    folder_path=root_path,
-                    prefix=prefix,
-                    service_name=service,
-                    methods=methods,
-                )
-            except Exception as error:
-                return ElementoServiceUnavailable(
+                response, status_code = current_service["get_service"](target_uuid, client_uuid)
+                if status_code != 200:
+                    raise Exception("Not found")
+            except Exception:
+                return ElementoNotFound(
                     origin="MESON",
-                    error="Service unavailable",
+                    error=f"Service with UID {target_uuid} not found",
                     trace=traceback.format_exc(),
-                    meson_source="delete_service()",
-                    service_failed=[service],
+                    meson_source="get_service()",
                 )
-
-        if service_uid is None:
-            return ElementoBadRequest(
-                origin="MESON",
-                error="Bad Request",
-                field_errors=[
-                    BadRequestFieldError(
-                        field="id",
-                        where="BODY",
-                        error="MISSING",
-                        type="str",
-                        expected_value="",
+            
+            billing_uuid = response.get("billing_uuid")
+            
+            try:
+                response, status_code = current_service["delete"](target_uuid, client_uuid)
+                if status_code == 200:
+                    billing_manager.update_status(billing_uuid, BillingStatus.DELETED)
+                    background_tasks.add_task(current_service["perform_full_delete"], client_uuid, target_uuid)
+                    return JSONResponse(
+                        status_code=200,
+                        content=f"{service} with id {target_uuid} deletion started",
                     )
-                ],
-                docs_url="",
-                trace=traceback.format_exc(),
-                meson_source="delete_service()",
-            )
-
-        ##* DELETE
-        try:
-            billing_uuid, status_code = (
-                services[service]["get_service"](
-                    service_uid, client_uuid, service_country, True
-                )
-                if service_to_delete.get("metadata") is None
-                else services[service]["get_service"](
-                    service_to_delete.get("metadata"),
-                    service_uid,
-                    client_uuid,
-                    service_country,
-                )
-            )
-            if status_code != 200:
-                raise Exception(f"Service delete failed: {billing_uuid}, status_code: {status_code}")
-        except Exception as error:
-            return ElementoNotFound(
-                origin='MESON',
-                error=f'Service with UID {service_uid} not found',
-                trace=traceback.format_exc(),
-                meson_source='get_service()'
-            )
-
-        try:
-            response, status_code = services[service]["delete"](
-                service_uid, client_uuid, service_country
-            )
-            if status_code == 200:
-                # -- STOP BILLING --
-                billing_manager.stop(billing_uuid, client_uuid)
-                # ------------------
-                return JSONResponse(
-                    status_code=200,
-                    content=f"{service} with id {service_to_delete.get("service_uuid")} deleted successfully",
-                )
-            else:
+                else:
+                    logging.error(f"Error during service deletion: {traceback.format_exc()}")
+                    billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+                    return ElementoInternalServerError(
+                        origin="PROVIDER",
+                        error=f"Internal Server Error: {response}",
+                        trace=traceback.format_exc(),
+                        meson_source="delete_service()",
+                    )
+            except Exception:
+                logging.error(f"Error during service deletion trigger: {traceback.format_exc()}")
+                billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
                 return ElementoInternalServerError(
-                    origin="PROVIDER",
-                    error=f"Internal Server Error: {response}",
+                    origin="MESON",
+                    error=f"Error during {service} delete trigger",
                     trace=traceback.format_exc(),
                     meson_source="delete_service()",
                 )
-        except Exception as error:
-            return ElementoInternalServerError(
-                origin="MESON",
-                error=f"Error during {service} delete",
-                trace=traceback.format_exc(),
-                meson_source="delete_service()",
+
+        else:
+            try:
+                response, status_code = current_service["get_service"](target_uuid, client_uuid)
+                if status_code != 200:
+                    raise Exception("Not found")
+            except Exception:
+                logging.error(f"Service with UID {target_uuid} not found: {traceback.format_exc()}")
+                return ElementoNotFound(
+                    origin="MESON",
+                    error=f"Service with UID {target_uuid} not found",
+                    trace=traceback.format_exc(),
+                    meson_source="get_service()",
+                )
+            
+            billing_uuid = response.get("billing_uuid")
+            service_to_delete['client_uuid'] = client_uuid
+            res = billing_manager.update_status(
+                billing_uuid, BillingStatus.TO_DELETE, service_type="service", service_sub_type=service, payload=service_to_delete
             )
+
+            if res is not None:
+                return JSONResponse(status_code=202, content={"status": "to_delete", "billing_uuid": billing_uuid})
+            else:
+                logging.error(f"Failed to mark resource as to_delete on billing side: {traceback.format_exc()}")
+                billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
+                return ElementoInternalServerError(
+                    origin="MESON",
+                    error="Failed to mark resource as to_delete on billing side",
+                    trace=traceback.format_exc(),
+                    meson_source="delete_service()",
+                )
 
     except Exception as error:
-        logging.error(error.__str__())
+        logging.error(str(error))
         return ElementoInternalServerError(
             origin="MESON",
             error="Internal Server Error",
@@ -481,49 +504,36 @@ async def delete_service(request: Request, service: str):
 
 @app.get("/api/v1.0/{service}/credentials/{service_uuid}")
 @elemento_iam.validate_request
-async def get_credentials_route(request: Request, service: str, service_uuid: str, token: Any = None):
+async def get_credentials(request: Request, service: str, service_uuid: str, token: Any = None):
     try:
         client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
         client_uuid = str(uuid.UUID(client_uuid))
 
-        ##* Verify presence of service
-        if services.get(service) is None:
-            try:
-                services[service] = try_dynamic_import_fun(
-                    folder_path=root_path,
-                    prefix=prefix,
-                    service_name=service,
-                    methods=methods,
-                )
-            except Exception as error:
-                return ElementoServiceUnavailable(
-                    origin="MESON",
-                    error="Service unavailable",
-                    trace=traceback.format_exc(),
-                    meson_source="delete_service()",
-                    service_failed=[service],
-                )
-        
-        if service_uuid is None:
-            return ElementoBadRequest(
+        try:
+            current_service = get_service_or_import(service)
+        except Exception:
+            return ElementoServiceUnavailable(
                 origin="MESON",
-                error="Bad Request",
-                field_errors=[
-                    BadRequestFieldError(
-                        field="id",
-                        where="BODY",
-                        error="MISSING",
-                        type="str",
-                        expected_value="",
-                    )
-                ],
-                docs_url="",
+                error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source="delete_service()",
+                meson_source="get_service_or_import()",
+                service_failed=[service],
             )
             
         try:
-            creds_response, status_code = services[service]["get_credentials"](client_uuid, service_uuid)
+            _, status_code = current_service["get_service"](service_uuid, client_uuid)
+            if status_code != 200:
+                raise Exception("Not found")
+        except Exception:
+            return ElementoNotFound(
+                origin="MESON",
+                error=f"Service with UID {service_uuid} not found",
+                trace=traceback.format_exc(),
+                meson_source="get_service()",
+            )
+
+        try:
+            creds_response, status_code = current_service["get_credentials"](client_uuid, service_uuid)
         except Exception:
             return ElementoInternalServerError(
                 origin="MESON",
@@ -585,11 +595,14 @@ async def cancreate(request: Request, service: str, token: Any = None):
         client_uuid = str(uuid.UUID(client_uuid))
         region = payload.get("region")
 
+        logging.debug(f"Received cancreate request with payload: {payload}")
+
         try:
             current_service = services.get(service)
             if not current_service:
                 raise ValueError(f"Service {service} not found")
         except Exception:
+            logging.debug(f"Service {service} not found")
             return ElementoServiceUnavailable(
                 origin="MESON",
                 error="Service unavailable",
@@ -597,10 +610,21 @@ async def cancreate(request: Request, service: str, token: Any = None):
                 meson_source="get_service_or_import()",
                 service_failed=[service],
             )
+        
+        try:
+            service_config = current_service["setup_config"](payload, client_uuid)
+        except Exception as e:
+            return ElementoInternalServerError(
+                origin="MESON",
+                error=f"Error during {service} setup config: {str(e)}",
+                trace=traceback.format_exc(),
+                meson_source="create_service()",
+            )
 
         try:
-            cancreate_res, status_code = current_service["cancreate"](payload)
+            cancreate_res, status_code = current_service["cancreate"](service_config)
         except Exception as e:
+            logging.debug(f"Error during getting create options for {service}: {str(e)}")
             return ElementoInternalServerError(
                 origin="MESON",
                 error=f"Error during getting create options for {service}: {str(e)}",
@@ -623,6 +647,7 @@ async def cancreate(request: Request, service: str, token: Any = None):
                 )
 
                 if isinstance(price_info, dict):
+                    logging.debug(f"Received price info: {price_info}")
                     price_value = price_info.get("total_net")
 
             except Exception as e:
@@ -637,11 +662,12 @@ async def cancreate(request: Request, service: str, token: Any = None):
             }
 
         elif status_code == 400:
-            logging.error(f"Error in cancreate {cancreate_res.get('error')} for service {service}")
+            logging.debug(f"Can create {service} - bad request: {cancreate_res.get('reasons')}")
             return {
                 "cancreate": cancreate_res.get("cancreate"),
                 "billing": [],
                 "provider": os.getenv("PROVIDER", "upcloud"),
+                "reasons": cancreate_res.get("reasons", {"general": "Unknown reason"}),
             }
 
         else:

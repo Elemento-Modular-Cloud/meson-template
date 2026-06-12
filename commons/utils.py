@@ -4,8 +4,8 @@ import logging
 import uuid
 from pathlib import Path
 from typing import List
-from models.ComputeModel import ElementoMachine
-from models.StorageModel import ElementoStorage
+from models.ComputeModel import VmModel
+from models.StorageModel import Storage
 
 
 logger = logging.getLogger("__name__")
@@ -13,7 +13,7 @@ TOLERANCE = 10  # TODO: define a proper tolerance
 
 
 def check_storage_tolerance(
-    requested: ElementoStorage, proposed: ElementoStorage
+    requested: Storage, proposed: Storage
 ) -> bool:
     try:
         err_margin = math.sqrt(((proposed.size - requested.size) / requested.size) ** 2)
@@ -29,7 +29,7 @@ def check_storage_tolerance(
         raise Exception(f"check storage tolerance - {error.__str__()}")
 
 
-def check_storage_params(config: ElementoStorage) -> bool:
+def check_storage_params(config: Storage) -> bool:
     if (  # TODO: improve the check (considering that some fields are Models)
         config.volume_uuid is None
         or config.creator_id is None
@@ -42,7 +42,7 @@ def check_storage_params(config: ElementoStorage) -> bool:
     return True
 
 
-def check_vm_tolerance(requested: ElementoMachine, proposed: ElementoMachine) -> bool:
+def check_vm_tolerance(requested: VmModel, proposed: VmModel) -> bool:
     try:
         err_margin_capacity = (
             (proposed.mem.capacity - requested.mem.capacity) / requested.mem.capacity
@@ -86,7 +86,7 @@ def check_vm_tolerance(requested: ElementoMachine, proposed: ElementoMachine) ->
         raise Exception(f"check vm tolerance - {error.__str__()}")
 
 
-def check_vm_params(config: ElementoMachine) -> bool:
+def check_vm_params(config: VmModel) -> bool:
     if (  # TODO: improve the check (considering that some fields are Models)
         config.client_uuid is None
         or config.billing_uuid is None
