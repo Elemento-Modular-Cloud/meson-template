@@ -35,6 +35,7 @@ from infrastructure.compute.compute_manager import (
     restart_compute,
     start_compute,
     stop_compute,
+    get_credentials
 )
 from models.ComputeModel import VmModel
 from elogger.logger_manager_fastapi import setup_logging

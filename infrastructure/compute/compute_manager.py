@@ -131,6 +131,7 @@ def create_compute(machine: VmModel) -> VmModel:
             caught it will result in a 500 Internal Server Error API response with the given error message inside the
             Exception.
     """
+    #! The created machine must have these informations saved into the provider fileds (ex: tags, labels, name): client_uuid, service_uuid, billing_uuid
     return machine
 
 
@@ -244,3 +245,24 @@ def get_compute_metrics(client_uuid: str, vm_uuid: str = None) -> list[str]:
             "status": "Active",
         }
     ]
+
+
+def get_credentials(client_uuid: str, vm_uuid: str) -> dict:
+    """Retrieve credentials for a virtual machine (VM) for a client by its client_uuid and vm_uuid.
+
+    The client_uuid is required to ensure that the user is the owner of the VM.
+    The function retrieves the credentials associated with the specified VM.
+
+    Args:
+        client_uuid (str): The client_uuid that needs to be checked.
+        vm_uuid (str): The vm_uuid that needs to be checked.
+    Returns:
+        dict: A dictionary containing the credentials for the specified VM.
+
+    Raises:
+        Exception: Raised when there is an error in retrieving credentials for the VM.
+    """
+    return {
+        "username": "admin",
+        "password": "password123"
+    }

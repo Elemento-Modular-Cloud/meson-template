@@ -116,7 +116,7 @@ def health():
 
 @app.get("/api/v1.0/{service}/running")
 @elemento_iam.validate_request
-async def service_description(request: Request, service: str, token: Any = None):
+async def route_list_service(request: Request, service: str, token: Any = None):
     try:
 
         client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
@@ -130,7 +130,7 @@ async def service_description(request: Request, service: str, token: Any = None)
                 origin="MESON",
                 error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source="service_description()",
+                meson_source="route_list_service()",
                 service_failed=[service],
             )
 
@@ -143,7 +143,7 @@ async def service_description(request: Request, service: str, token: Any = None)
                 origin="PROVIDER",
                 error=f"Internal Server Error: {response}",
                 trace=traceback.format_exc(),
-                meson_source="service_description()",
+                meson_source="route_list_service()",
             )
 
     except Exception as error:
@@ -152,13 +152,13 @@ async def service_description(request: Request, service: str, token: Any = None)
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
-            meson_source="service_description()",
+            meson_source="route_list_service()",
         )
 
 
 @app.get("/api/v1.0/{service}/running/{service_uuid}")
 @elemento_iam.validate_request
-async def service_description_by_id(request: Request, service: str, service_uuid: str, token: Any = None):
+async def route_get_service_by_id(request: Request, service: str, service_uuid: str, token: Any = None):
     try:
         client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
         client_uuid = str(uuid.UUID(client_uuid))
@@ -169,7 +169,7 @@ async def service_description_by_id(request: Request, service: str, service_uuid
                 origin="MESON",
                 error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source="service_description_by_id()",
+                meson_source="route_get_service_by_id()",
                 service_failed=[service],
             )
 
@@ -189,19 +189,19 @@ async def service_description_by_id(request: Request, service: str, service_uuid
             )
 
     except Exception as error:
-        logging.error(f"server_description_by_id - {str(error)}")
+        logging.error(f"route_get_service_by_id - {str(error)}")
         return ElementoInternalServerError(
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
-            meson_source="servers_description_by_id()",
+            meson_source="route_get_service_by_id()",
             headers={"error": str(error)},
         )
 
 
 @app.post("/api/v1.0/{service}/create")
 @elemento_iam.validate_request
-async def create_service(request: Request, service: str, background_tasks: BackgroundTasks, token: Any = None):
+async def route_create_service(request: Request, service: str, background_tasks: BackgroundTasks, token: Any = None):
     billing_uuid = str(uuid.uuid4())
     client_uuid = None
 
@@ -227,7 +227,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                 ],
                 docs_url="",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_create_service()",
             )
 
         if interval is None:
@@ -245,7 +245,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                 ],
                 docs_url="",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_create_service()",
             )
         
         try:
@@ -255,7 +255,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                 origin="MESON",
                 error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_create_service()",
                 service_failed=[service],
             )
         
@@ -267,7 +267,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                 origin="MESON",
                 error=f"Error during {service} creation trigger: {str(e)}",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_create_service()",
             )
         
         try:
@@ -277,7 +277,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                 origin="MESON",
                 error=f"Error during {service} setup config: {str(e)}",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_create_service()",
             )
 
         # --------- DEV BILLING BYPASS ---------
@@ -350,7 +350,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                         origin="PROVIDER",
                         error=f"Immediate provider error: {service_created}",
                         trace=traceback.format_exc(),
-                        meson_source="create_service()",
+                        meson_source="route_create_service()",
                     )
 
             except Exception:
@@ -362,7 +362,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                     trace=traceback.format_exc(),
                     stopped_successfully=True,
                     billing_suspended=True,
-                    meson_source="create_service()",
+                    meson_source="route_create_service()",
                 )
 
         else:
@@ -371,7 +371,7 @@ async def create_service(request: Request, service: str, background_tasks: Backg
                 origin="MESON",
                 error="Not authorized",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_create_service()",
             )
 
     except Exception as error:
@@ -380,13 +380,13 @@ async def create_service(request: Request, service: str, background_tasks: Backg
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
-            meson_source="create_service()",
+            meson_source="route_create_service()",
         )
 
 
 @app.delete("/api/v1.0/{service}/delete")
 @elemento_iam.validate_request
-async def delete_service(request: Request, service: str, background_tasks: BackgroundTasks, token: Any = None):
+async def route_delete_service(request: Request, service: str, background_tasks: BackgroundTasks, token: Any = None):
     try:
         service_to_delete = await request.json()
         client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid") or service_to_delete.get("client_uuid")
@@ -401,7 +401,7 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
                 origin="MESON",
                 error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source="delete_service()",
+                meson_source="route_delete_service()",
                 service_failed=[service],
             )
 
@@ -427,7 +427,7 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
                     origin="MESON",
                     error=f"Service with UID {target_uuid} not found",
                     trace=traceback.format_exc(),
-                    meson_source="get_service()",
+                    meson_source="route_get_service_by_id()",
                 )
             
             billing_uuid = response.get("billing_uuid")
@@ -448,7 +448,7 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
                         origin="PROVIDER",
                         error=f"Internal Server Error: {response}",
                         trace=traceback.format_exc(),
-                        meson_source="delete_service()",
+                        meson_source="route_delete_service()",
                     )
             except Exception:
                 logging.error(f"Error during service deletion trigger: {traceback.format_exc()}")
@@ -457,7 +457,7 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
                     origin="MESON",
                     error=f"Error during {service} delete trigger",
                     trace=traceback.format_exc(),
-                    meson_source="delete_service()",
+                    meson_source="route_delete_service()",
                 )
 
         else:
@@ -471,7 +471,7 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
                     origin="MESON",
                     error=f"Service with UID {target_uuid} not found",
                     trace=traceback.format_exc(),
-                    meson_source="get_service()",
+                    meson_source="route_get_service_by_id()",
                 )
             
             billing_uuid = response.get("billing_uuid")
@@ -489,7 +489,7 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
                     origin="MESON",
                     error="Failed to mark resource as to_delete on billing side",
                     trace=traceback.format_exc(),
-                    meson_source="delete_service()",
+                    meson_source="route_delete_service()",
                 )
 
     except Exception as error:
@@ -498,13 +498,13 @@ async def delete_service(request: Request, service: str, background_tasks: Backg
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
-            meson_source="delete_service()",
+            meson_source="route_delete_service()",
         )
 
 
 @app.get("/api/v1.0/{service}/credentials/{service_uuid}")
 @elemento_iam.validate_request
-async def get_credentials(request: Request, service: str, service_uuid: str, token: Any = None):
+async def route_get_credentials(request: Request, service: str, service_uuid: str, token: Any = None):
     try:
         client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
         client_uuid = str(uuid.UUID(client_uuid))
@@ -516,7 +516,7 @@ async def get_credentials(request: Request, service: str, service_uuid: str, tok
                 origin="MESON",
                 error="Service unavailable",
                 trace=traceback.format_exc(),
-                meson_source="get_service_or_import()",
+                meson_source="route_get_credentials()",
                 service_failed=[service],
             )
             
@@ -529,7 +529,7 @@ async def get_credentials(request: Request, service: str, service_uuid: str, tok
                 origin="MESON",
                 error=f"Service with UID {service_uuid} not found",
                 trace=traceback.format_exc(),
-                meson_source="get_service()",
+                meson_source="route_get_service_by_id()",
             )
 
         try:
@@ -539,7 +539,7 @@ async def get_credentials(request: Request, service: str, service_uuid: str, tok
                 origin="MESON",
                 error=f"Error during key rotation for {service_uuid}",
                 trace=traceback.format_exc(),
-                meson_source="get_credentials()",
+                meson_source="route_get_credentials()",
             )
 
         if status_code in [200, 201]:
@@ -557,14 +557,14 @@ async def get_credentials(request: Request, service: str, service_uuid: str, tok
                 field_errors=[],
                 docs_url="",
                 trace=traceback.format_exc(),
-                meson_source="get_credentials()",
+                meson_source="route_get_credentials()",
             )
         elif status_code in [403, 404]:
             return ElementoNotFound(
                 origin="PROVIDER",
                 error=f"{service} not found: {service_uuid}",
                 trace=traceback.format_exc(),
-                meson_source="get_credentials()",
+                meson_source="route_get_credentials()",
             )
 
         else:
@@ -572,23 +572,23 @@ async def get_credentials(request: Request, service: str, service_uuid: str, tok
                 origin="PROVIDER",
                 error=f"Internal Server Error: {creds_response}",
                 trace="",
-                meson_source="get_credentials()",
+                meson_source="route_get_credentials()",
             )
 
     except Exception as error:
-        logging.error(f"get_credentials_route - {str(error)}")
+        logging.error(f"route_get_credentials - {str(error)}")
         return ElementoInternalServerError(
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
-            meson_source="get_credentials_route()",
+            meson_source="route_get_credentials()",
             headers={"error": str(error)},
         )
 
 
 @app.post("/api/v1.0/{service}/cancreate")
 @elemento_iam.validate_request
-async def cancreate(request: Request, service: str, token: Any = None):
+async def route_cancreate(request: Request, service: str, token: Any = None):
     try:
         payload = await request.json()
         client_uuid = getattr(token, "client_uuid", None) or request.headers.get("client_uuid")
@@ -618,7 +618,7 @@ async def cancreate(request: Request, service: str, token: Any = None):
                 origin="MESON",
                 error=f"Error during {service} setup config: {str(e)}",
                 trace=traceback.format_exc(),
-                meson_source="create_service()",
+                meson_source="route_cancreate()",
             )
 
         try:
@@ -629,7 +629,7 @@ async def cancreate(request: Request, service: str, token: Any = None):
                 origin="MESON",
                 error=f"Error during getting create options for {service}: {str(e)}",
                 trace=traceback.format_exc(),
-                meson_source="cancreate()",
+                meson_source="route_cancreate()",
             )
 
         price_value = None
@@ -677,15 +677,15 @@ async def cancreate(request: Request, service: str, token: Any = None):
                 field_errors=[],
                 docs_url="",
                 trace=traceback.format_exc(),
-                meson_source="cancreate()",
+                meson_source="route_cancreate()",
             )
 
     except Exception as error:
-        logging.error(f"cancreate generic error - {str(error)}")
+        logging.error(f"route_cancreate generic error - {str(error)}")
         return ElementoInternalServerError(
             origin="MESON",
             error="Internal Server Error",
             trace=traceback.format_exc(),
-            meson_source="cancreate()",
+            meson_source="route_cancreate()",
             headers={"error": str(error)},
         )
