@@ -1,5 +1,6 @@
 import json
 import os
+
 from models.StorageModel import Storage
 
 
@@ -164,7 +165,7 @@ class AuthModel:
         }
 
 
-class VmModel:
+class ComputeModel:
 
     def __init__(
         self,
@@ -229,7 +230,7 @@ class VmModel:
         elif "authentication" in json_request["req"].keys():
             auth = AuthModel.from_json(json_request["req"]["authentication"])
 
-        return VmModel(
+        return ComputeModel(
             client_uuid=client_uuid,
             vm_name=json_request["vm_name"],
             volumes=volumes,
@@ -260,7 +261,7 @@ class VmModel:
             auth = AuthModel.from_json(request["req"]["authentication"])
             
         region = request.get("region")
-        return VmModel(
+        return ComputeModel(
             cpu=cpu,
             mem=mem,
             pci=pcidevs,
@@ -271,19 +272,19 @@ class VmModel:
         )
 
     @staticmethod
-    def from_gcp_json(gcp_data: dict):
-        labels = gcp_data.get("labels", {})
-        machine_details = gcp_data.get("_machine_type_details", {}) or {}
+    def from_provider_json(provider_data: dict):
+        labels = provider_data.get("labels", {})
+        machine_details = provider_data.get("_machine_type_details", {}) or {}
 
         cpu = CpuModel(
             slots=machine_details.get("guestCpus", 1),
             fullPhysical=not machine_details.get("isSharedCpu", False),
-            arch=[gcp_data.get("cpuPlatform", "X86_64")],
+            arch=[provider_data.get("cpuPlatform", "X86_64")],
         )
 
         mem = MemoryModel(capacity=machine_details.get("memoryMb", 1024))
 
-        nics = gcp_data.get("networkInterfaces", [])
+        nics = provider_data.get("networkInterfaces", [])
         nic = nics[0] if nics else {}
         pub_ipv4 = None
         if "accessConfigs" in nic and nic["accessConfigs"]:
@@ -295,7 +296,7 @@ class VmModel:
         misc = MiscModel(os_family=labels.get("os_family"), os_flavour=labels.get("os_flavour"))
 
         volumes = []
-        for disk in gcp_data.get("disks", []):
+        for disk in provider_data.get("disks", []):
             details = disk.get("_source_disk_details", {}) or {}
             disk_labels = details.get("labels", {}) or {}
 
@@ -312,16 +313,16 @@ class VmModel:
                 "priority": int(disk_labels.get("priority", 50)) if disk_labels.get("priority") else 50,
                 "volume_tags": disk_labels.get("tags", []),
                 "type": disk_labels.get("type"),
-                "region": gcp_data.get("zone", "").split("/")[-1]
+                "region": provider_data.get("zone", "").split("/")[-1]
             }
 
             volumes.append(Storage.from_json(mock_volume_payload))
 
-        return VmModel(
-            region=gcp_data.get("zone", "").split("/")[-1],
+        return ComputeModel(
+            region=provider_data.get("zone", "").split("/")[-1],
             client_uuid=labels.get("client_uuid"),
-            vm_name=gcp_data.get("name"),
-            vm_uuid=gcp_data.get("id"),
+            vm_name=provider_data.get("name"),
+            vm_uuid=provider_data.get("id"),
             volumes=volumes,
             billing_uuid=labels.get("billing_uuid"),
             cpu=cpu,
@@ -329,7 +330,7 @@ class VmModel:
             misc=misc,
             network_config=net_cfg,
             private_network_config=priv_net_cfg,
-            creation_date=gcp_data.get("creationTimestamp"),
+            creation_date=provider_data.get("creationTimestamp"),
         )
 
     def to_json(self):
@@ -437,7 +438,7 @@ class VmModel:
             },
             "xml": "",
             "target_type": "meson",
-            "serverurl": f"https://{os.environ.get('PROVIDER', 'gcp')}.{env_suffix}meson.elemento.cloud:7777",
+            "serverurl": f"https://{os.environ.get('PROVIDER', 'provider')}.{env_suffix}meson.elemento.cloud:7777",
             "states": "running",
             "vm_tags": self.vm_tags,
             "billing_uuid": self.billing_uuid,

@@ -1,13 +1,11 @@
 import logging
 import os
 import traceback
-from typing import Any
-import httpx
 
+from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-
 from __init__ import __version__
 from commons.elemento_iam import ElementoIdentityAccessManagement
 from elemento_billing_manager.billing_manager import BillingStatus, billing_manager
@@ -49,7 +47,7 @@ uvicorn_logger.addFilter(HealthCheckFilter())
 async def root(token: Any = None):
     return PlainTextResponse(
         status_code=200,
-        content=f"Hello, world! This is an Elemento Storage Meson for provider {os.getenv('PROVIDER', 'gcp')}.",
+        content=f"Hello, world! This is an Elemento Storage Meson for provider {os.getenv('PROVIDER', 'provider')}.",
     )
 
 
@@ -187,8 +185,14 @@ async def route_create_storage(request: Request, token: Any = None):
             trace=traceback.format_exc(),
             meson_source="route_create_storage()",
         )
-
+    
     try:
+    # -------- DEV BILLING BYPASS --------
+    # disk_name = create_storage(storage_data)
+    # storage_data.name = disk_name
+    # return JSONResponse(content=storage_data.to_json_response(), status_code=200)
+    # ------------------------------------
+
         if not billing_uuid:
             try:
                 if parent_billing_uuid:
@@ -200,7 +204,7 @@ async def route_create_storage(request: Request, token: Any = None):
                         service_type="storage",
                         service_sub_type="blockstorage",
                         region=storage_data.region,
-                        provider=os.getenv("PROVIDER", "gcp"),
+                        provider=os.getenv("PROVIDER", "provider"),
                     )
                 else:
                     payment_link, billing_uuid = billing_manager.start(
@@ -209,7 +213,7 @@ async def route_create_storage(request: Request, token: Any = None):
                         service_type="storage",
                         service_sub_type="blockstorage",
                         region=storage_data.region,
-                        provider=os.getenv("PROVIDER", "gcp"),
+                        provider=os.getenv("PROVIDER", "provider"),
                         org=org,
                         interval=interval,
                     )
@@ -275,11 +279,22 @@ async def route_delete_storage(request: Request, token: Any = None):
         if not volume:
             return ElementoNotFound(
                 origin="MESON", 
-                error="Volume not found on GCP infrastructure. Cannot proceed."
+                error="Volume not found on infrastructure. Cannot proceed."
             )
+        
+        # -------- DEV BILLING BYPASS --------
+        # isDeleted = delete_storage(volume_id)
+        # if isDeleted:
+        #     return JSONResponse(content={"destroyed": True, "vid": volume_id}, status_code=200)
+        # else:
+        #     return ElementoNotFound(
+        #         origin="MESON",
+        #         error="Volume not found or could not be deleted.",
+        #         trace=traceback.format_exc(),
+        #     )
+        # ------------------------------------
 
         billing_uuid = volume.billing_uuid
-        
         if not billing_uuid:
             return ElementoNotFound(
                 origin="MESON", 
@@ -297,7 +312,7 @@ async def route_delete_storage(request: Request, token: Any = None):
                     billing_manager.update_status(billing_uuid, BillingStatus.ERROR)
                     return ElementoNotFound(
                         origin="MESON",
-                        error="Volume not found or could not be deleted synchronously on GCP",
+                        error="Volume not found or could not be deleted synchronously",
                         trace=traceback.format_exc(),
                     )
             except Exception as ex:

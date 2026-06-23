@@ -4,7 +4,7 @@ import logging
 import uuid
 from pathlib import Path
 from typing import List
-from models.ComputeModel import VmModel
+from models.ComputeModel import ComputeModel
 from models.StorageModel import Storage
 
 
@@ -42,7 +42,7 @@ def check_storage_params(config: Storage) -> bool:
     return True
 
 
-def check_vm_tolerance(requested: VmModel, proposed: VmModel) -> bool:
+def check_vm_tolerance(requested: ComputeModel, proposed: ComputeModel) -> bool:
     try:
         err_margin_capacity = (
             (proposed.mem.capacity - requested.mem.capacity) / requested.mem.capacity
@@ -86,7 +86,7 @@ def check_vm_tolerance(requested: VmModel, proposed: VmModel) -> bool:
         raise Exception(f"check vm tolerance - {error.__str__()}")
 
 
-def check_vm_params(config: VmModel) -> bool:
+def check_vm_params(config: ComputeModel) -> bool:
     if (  # TODO: improve the check (considering that some fields are Models)
         config.client_uuid is None
         or config.billing_uuid is None

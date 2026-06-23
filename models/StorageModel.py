@@ -128,7 +128,7 @@ class Storage:
             "bus": self.bus,
             "format_type": self.format_type,
             "server_url": self.serverurl,
-            "serverurl": f"https://{os.environ.get('PROVIDER', 'gcp')}.{env_suffix}meson.elemento.cloud:7772",
+            "serverurl": f"https://{os.environ.get('PROVIDER', 'provider')}.{env_suffix}meson.elemento.cloud:7772",
             "read_mb_bw": 0,
             "write_mb_bw": 0,
             "read_iops": 0,

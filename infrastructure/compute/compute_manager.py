@@ -1,5 +1,6 @@
 import datetime
-from models.ComputeModel import CpuModel, MemoryModel, MiscModel, NetworkConfigModel, AuthModel, VmModel
+
+from models.ComputeModel import CpuModel, MemoryModel, MiscModel, NetworkConfigModel, AuthModel, ComputeModel
 from models.StorageModel import Storage
 
 
@@ -20,7 +21,7 @@ volumes = [
         creation_date=str(datetime.datetime.now()),
     )
 ]
-machine = VmModel(
+machine = ComputeModel(
     client_uuid=client_uuid,
     vm_name="test-mockup",
     volumes=volumes,
@@ -51,8 +52,8 @@ machine = VmModel(
 )
 
 
-def list_compute(client_uuid: str) -> list[VmModel]:
-    """Returns a list of VmModel objects that are owned by the given client_uuid.
+def list_compute(client_uuid: str) -> list[ComputeModel]:
+    """Returns a list of ComputeModel objects that are owned by the given client_uuid.
 
     This method should check if a Compute Instance (Machine) that is running is owned by the given client_uuid,
     and return only the matching ones.
@@ -60,7 +61,7 @@ def list_compute(client_uuid: str) -> list[VmModel]:
     Args:
         client_uuid (str): The client_uuid that needs to be checked.
     Returns:
-        A list of VmModel objects that are owned by the given client_uuid.
+        A list of ComputeModel objects that are owned by the given client_uuid.
     Raises:
         Exception:
             Raised when a fatal error happens. Should only be thrown when an unrecoverable error occurs as it when
@@ -70,8 +71,8 @@ def list_compute(client_uuid: str) -> list[VmModel]:
     return [machine]
 
 
-def get_compute_by_uuid(client_uuid: str, vm_uuid: str) -> VmModel:
-    """Returns an VmModel object that is owned by the given client_uuid and has the given vm_uuid.
+def get_compute_by_uuid(client_uuid: str, vm_uuid: str) -> ComputeModel:
+    """Returns an ComputeModel object that is owned by the given client_uuid and has the given vm_uuid.
 
     This method should check if a Compute Instance (Machine) that is running is owned by the given client_uuid,
     and has the given vm_uuid, and return it if it matches.
@@ -80,7 +81,7 @@ def get_compute_by_uuid(client_uuid: str, vm_uuid: str) -> VmModel:
         client_uuid (str): The client_uuid that needs to be checked.
         vm_uuid (str): The vm_uuid that needs to be checked.
     Returns:
-        An VmModel object that is owned by the given client_uuid and has the given vm_uuid.
+        An ComputeModel object that is owned by the given client_uuid and has the given vm_uuid.
     Raises:
         Exception:
             Raised when a fatal error happens. Should only be thrown when an unrecoverable error occurs as it when
@@ -90,17 +91,17 @@ def get_compute_by_uuid(client_uuid: str, vm_uuid: str) -> VmModel:
     return machine
 
 
-def is_compute_config_available(config: VmModel) -> VmModel:
+def is_compute_config_available(config: ComputeModel) -> ComputeModel:
     """Checks if a given configuration can be created or not.
 
     The given configuration will contain all necessary information to just check if it can be created or not. If the
     issue with allocation is only in RAM or CPU Slots, you can make adjustments to make the config compatible by modifying
-    the VmModel directly. Use common sense so do not modify the configuration for CPU and RAM excessively.
+    the ComputeModel directly. Use common sense so do not modify the configuration for CPU and RAM excessively.
     For example, if the requested RAM quantity is 512miB but only a 500miB or 1GiB config is available, the 500miB
     option should be used. Or if 6GiB are requested but the closest available configurations are 4 or 8GiB the 8GiB option
     should be used.
     Args:
-        config (VmModel): The configuration that needs to be checked.
+        config (ComputeModel): The configuration that needs to be checked.
     Returns:
         A Machine that is compatible with your service.
     Raises:
@@ -113,16 +114,16 @@ def is_compute_config_available(config: VmModel) -> VmModel:
     return machine
 
 
-def create_compute(machine: VmModel) -> VmModel:
-    """Receives an VmModels and creates it.
+def create_compute(machine: ComputeModel) -> ComputeModel:
+    """Receives an ComputeModels and creates it.
 
-    Receives an VmModel. You need to implement a creation flow using the attributes available in the VmModel
+    Receives an ComputeModel. You need to implement a creation flow using the attributes available in the ComputeModel
     class, using all compatible attributes.
 
     Args:
-        machine (VmModel): The machine that needs to be created.
+        machine (ComputeModel): The machine that needs to be created.
     Returns:
-        The VmModel instance containing every available detail.
+        The ComputeModel instance containing every available detail.
         Some fields MUST be filled during the creation and added to the machine given as argument.
         Those fields are: network_interfaces, ids of volumes created during the vm creation (without the uid in the request).
     Raises:

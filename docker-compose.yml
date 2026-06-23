@@ -14,7 +14,7 @@ services:
 
   storage:
     build: .
-    image: ${IMAGE_NAME:-elemento-meson-template-compute:local}
+    image: ${IMAGE_NAME:-elemento-meson-template-storage:local}
     environment:
       - PYTHONPATH=/app:/app/elemento_billing_manager
     ports:
@@ -27,7 +27,7 @@ services:
 
   service:
     build: .
-    image: ${IMAGE_NAME:-elemento-meson-template-compute:local}
+    image: ${IMAGE_NAME:-elemento-meson-template-service:local}
     environment:
       - PYTHONPATH=/app:/app/elemento_billing_manager
     ports:

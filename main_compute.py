@@ -5,14 +5,13 @@ import os
 import re
 import traceback
 import uuid
-from typing import Any
-
 import requests
+
+from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.responses import StreamingResponse
-
 from __init__ import __version__
 from commons.elemento_iam import ElementoIdentityAccessManagement
 from commons.utils import get_from_dict
@@ -37,7 +36,7 @@ from infrastructure.compute.compute_manager import (
     stop_compute,
     get_credentials
 )
-from models.ComputeModel import VmModel
+from models.ComputeModel import ComputeModel
 from elogger.logger_manager_fastapi import setup_logging
 from asgi_correlation_id import CorrelationIdMiddleware
 
@@ -143,7 +142,7 @@ async def route_create_compute(request: Request, token: Any = None):
             )
             
         try:
-            vm = VmModel.from_json(servers_to_create, client_uuid)
+            vm = ComputeModel.from_json(servers_to_create, client_uuid)
         except Exception as ex:
             logging.error(ex.__str__())
             return ElementoBadRequest(
@@ -186,6 +185,11 @@ async def route_create_compute(request: Request, token: Any = None):
                 trace=f"{traceback.format_exc()}",
                 meson_source="route_create_compute()",
             )
+        
+        # -------- DEV BILLING BYPASS --------
+        # create_compute(servers_to_create, client_uuid, billing_uuid, auth_header)
+        # return JSONResponse(content=vm.to_json_register(), status_code=200)
+        # ------------------------------------
 
         billing_zone = zone_name if zone_name else servers_to_create.get("region")
         
@@ -239,6 +243,7 @@ async def route_create_compute(request: Request, token: Any = None):
                     error=f"Internal Server Error - {ex}",
                     trace=f"{traceback.format_exc()}",
                 )
+            
     except Exception as e:
         logging.error(f"Unexpected error occurred: {str(e)}")
         return ElementoInternalServerError(
@@ -433,6 +438,17 @@ async def route_delete_compute(request: Request, token: Any = None):
 
         if not vm_uuid:
             return JSONResponse(content={"response": "Wrong json parsed: missing vm_uid"}, status_code=400)
+        
+        # -------- DEV BILLING BYPASS --------
+        # delete_compute(client_uuid=str(target_client), vm_uuid=vm_uuid, auth_token=auth_header)
+        # return JSONResponse(
+        #     content={
+        #         "unregistered": True,
+        #         "uniqueID": vm_uuid,
+        #     },
+        #     status_code=200,
+        # )
+        # ------------------------------------
 
         if role == "portal":
             target_client = to_destroy.get("client_uuid") or to_destroy.get("client_uid") or client_uuid
@@ -464,7 +480,7 @@ async def route_delete_compute(request: Request, token: Any = None):
             billing_uuid = None
             try:
                 to_destroy['client_uuid'] = client_uuid
-                billing_uuid = get_billing_uuid(vm_uuid)
+                billing_uuid = to_destroy.get("billing_uuid")
                 
                 res = billing_manager.update_status(
                     billing_uuid, 
