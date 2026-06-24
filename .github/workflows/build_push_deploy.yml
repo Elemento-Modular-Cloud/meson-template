@@ -1,0 +1,193 @@
+# !! NEEDS THE FOLLOWING SECRETS TO WORK !!
+# - SUBMODULE_TOKEN: A PAT with repo access to fetch submodules
+# - PROVIDER: The cloud provider (e.g., aws, azure, google)
+
+name: Build, Push to GHCR, and Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      sha_short: ${{ steps.vars.outputs.sha_short }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.SUBMODULE_TOKEN }}
+          submodules: recursive
+
+      - name: Set lowercase repository name
+        id: repo_lower
+        run: echo "repo=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Extract version from git tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == *refs/tags* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            # Result: develop-7a2b3c4
+            VERSION="${{ github.ref_name }}-${{ steps.vars.outputs.sha_short }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build components if they exist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          SERVICES=("service" "compute" "storage")
+          
+          for service in "${SERVICES[@]}"; do
+            if docker compose config --services 2>/dev/null | grep -q "^$service$"; then
+              FULL_IMAGE_NAME="elemento-meson-${{ secrets.PROVIDER }}-${service}:${VERSION}"
+              GHCR_IMAGE="ghcr.io/${{ steps.repo_lower.outputs.repo }}-${service}:${VERSION}"
+              
+              echo "Building $service as $FULL_IMAGE_NAME"
+              
+              IMAGE_NAME="$FULL_IMAGE_NAME" docker compose build "$service"
+              
+              docker tag "$FULL_IMAGE_NAME" "$GHCR_IMAGE"
+              echo "Tagged: $FULL_IMAGE_NAME -> $GHCR_IMAGE"
+            else
+              echo "Service $service not found"
+            fi
+          done
+
+      - name: Push to GHCR
+        run: |
+          docker images --format "table {{.Repository}}:{{.Tag}}" | grep "ghcr.io/elemento-modular-cloud" | awk '{print $1}' | while read image; do
+            if [ ! -z "$image" ]; then
+              echo "Pushing $image"
+              docker push "$image" || true
+            fi
+          done
+
+  deploy-image-update:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout a8s repository
+        uses: actions/checkout@v6
+        with:
+          repository: Elemento-Modular-Cloud/a8s
+          token: ${{ secrets.SUBMODULE_TOKEN }}
+
+      - name: Determine environment and image version
+        id: env_version
+        run: |
+          # Determine environment: dev for manual triggers, prod for tag pushes
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="dev"
+          else
+            ENV="prod"
+          fi
+          
+          # Determine version
+          if [[ "${{ github.ref }}" == *refs/tags* ]]; then
+            # For prod, use git tags
+            VERSION="${{ github.ref_name }}"
+          else
+            # For dev, use develop-<short-sha> format
+            VERSION="develop-${{ needs.build-and-push.outputs.sha_short }}"
+          fi
+          
+          echo "env=$ENV" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Environment: $ENV"
+          echo "Version: $VERSION"
+
+      - name: Update deployment manifests
+        env:
+          PROVIDER: ${{ secrets.PROVIDER }}
+          VERSION: ${{ steps.env_version.outputs.version }}
+          ENV: ${{ steps.env_version.outputs.env }}
+        run: |
+          echo "Provider: $PROVIDER"
+          echo "Environment: $ENV"
+          echo "Version: $VERSION"
+          
+          MANIFEST_DIR="apps/$ENV/meson-$PROVIDER"
+          
+          if [ ! -d "$MANIFEST_DIR" ]; then
+            echo "ERROR: Directory not found: $MANIFEST_DIR"
+            echo "Available directories in apps/$ENV:"
+            ls -la "apps/$ENV/" || echo "apps/$ENV does not exist"
+            exit 1
+          fi
+          
+          echo "Updating manifests in: $MANIFEST_DIR"
+          echo "New version: $VERSION"
+          
+          # Update all deployment YAML files for the provider
+          for file in "$MANIFEST_DIR"/meson-"$PROVIDER"-*.yaml; do
+            if [ -f "$file" ]; then
+              echo "Processing: $file"
+              
+              # Extract the current image line and update the tag
+              # Pattern: image: ghcr.io/elemento-modular-cloud/elemento-meson-<provider>-<service>:<old-version>
+              sed -i "s|image: ghcr\.io/elemento-modular-cloud/elemento-meson-$PROVIDER-\([^:]*\):[^\"]*|image: ghcr.io/elemento-modular-cloud/elemento-meson-$PROVIDER-\1:$VERSION|g" "$file"
+            fi
+          done
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet; then
+            echo "No changes detected"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            git diff
+          fi
+
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          PROVIDER: ${{ secrets.PROVIDER }}
+          ENV: ${{ steps.env_version.outputs.env }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          COMMIT_MESSAGE="upd: ${{ secrets.PROVIDER }} $ENV image update"
+          
+          git add "apps/$ENV/meson-$PROVIDER/"
+          git commit -m "$COMMIT_MESSAGE"
+          git push
+
+      - name: Print summary
+        env:
+          PROVIDER: ${{ secrets.PROVIDER }}
+          VERSION: ${{ steps.env_version.outputs.version }}
+          ENV: ${{ steps.env_version.outputs.env }}
+        run: |
+          echo "=== Build and Deploy Summary ==="
+          echo "Provider: $PROVIDER"
+          echo "Environment: $ENV"
+          echo "New Image Version: $VERSION"
+          echo "Changes pushed: ${{ steps.check_changes.outputs.has_changes }}"
